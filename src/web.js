@@ -24,7 +24,7 @@ export function createWebApp({ config, store, telegram }) {
     });
   }
 
-  app.use(config.webhookPath, telegram.bot.webhookCallback(config.webhookPath));
+  app.use(config.webhookPath, telegram.bot.webhookCallback());
 
   app.get("/health", (_req, res) => {
     res.json({ ok: true });
