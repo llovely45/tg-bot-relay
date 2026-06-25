@@ -1,0 +1,20 @@
+services:
+  tg-bot:
+    build: .
+    container_name: tg-bot-relay
+    restart: unless-stopped
+    ports:
+      - "${PORT:-3000}:3000"
+    environment:
+      TG_BOT_TOKEN: "${TG_BOT_TOKEN}"
+      TG_GROUP_ID: "${TG_GROUP_ID}"
+      APP_BASE_URL: "${APP_BASE_URL}"
+      TURNSTILE_SITE_KEY: "${TURNSTILE_SITE_KEY}"
+      TURNSTILE_SECRET_KEY: "${TURNSTILE_SECRET_KEY}"
+      PORT: "${PORT:-3000}"
+      SQLITE_PATH: "${SQLITE_PATH:-/app/data/bot.db}"
+      VERIFICATION_TTL_MINUTES: "${VERIFICATION_TTL_MINUTES:-30}"
+      TG_WEBHOOK_PATH: "${TG_WEBHOOK_PATH:-/telegram/webhook}"
+      TG_WEBHOOK_SECRET: "${TG_WEBHOOK_SECRET}"
+    volumes:
+      - ./data:/app/data
