@@ -61,10 +61,39 @@ export function createDb(sqlitePath) {
       SET is_verified = 1, is_blacklisted = 0, topic_thread_id = ?, updated_at = ?
       WHERE user_id = ?
     `),
+    cancelVerification: db.prepare(`
+      UPDATE users
+      SET is_verified = 0, topic_thread_id = NULL, updated_at = ?
+      WHERE user_id = ?
+    `),
     blacklistUser: db.prepare(`
       UPDATE users
       SET is_blacklisted = 1, updated_at = ?
       WHERE user_id = ?
+    `),
+    clearBlacklist: db.prepare(`
+      UPDATE users
+      SET is_blacklisted = 0, updated_at = ?
+      WHERE user_id = ?
+    `),
+    getUsersByState: db.prepare(`
+      SELECT *
+      FROM users
+      WHERE
+        CASE
+          WHEN ? = 'pending' THEN is_verified = 0 AND is_blacklisted = 0
+          WHEN ? = 'verified' THEN is_verified = 1
+          WHEN ? = 'blacklisted' THEN is_blacklisted = 1
+        END
+      ORDER BY updated_at DESC
+      LIMIT ?
+    `),
+    getDashboardCounts: db.prepare(`
+      SELECT
+        SUM(CASE WHEN is_verified = 0 AND is_blacklisted = 0 THEN 1 ELSE 0 END) AS pending_count,
+        SUM(CASE WHEN is_verified = 1 THEN 1 ELSE 0 END) AS verified_count,
+        SUM(CASE WHEN is_blacklisted = 1 THEN 1 ELSE 0 END) AS blacklisted_count
+      FROM users
     `),
     createSession: db.prepare(`
       INSERT INTO verification_sessions (
@@ -144,6 +173,14 @@ export function createDb(sqlitePath) {
       return statements.getSession.get(sessionId);
     },
 
+    getUsersByState(state, limit = 10) {
+      return statements.getUsersByState.all(state, state, state, limit);
+    },
+
+    getDashboardCounts() {
+      return statements.getDashboardCounts.get();
+    },
+
     markVerified(userId, threadId, sessionId) {
       const now = new Date().toISOString();
       const tx = db.transaction(() => {
@@ -161,6 +198,24 @@ export function createDb(sqlitePath) {
         statements.markSessionFailed.run(reason, now, sessionId);
       });
       tx();
+      return statements.getUser.get(userId);
+    },
+
+    blacklistUserDirect(userId) {
+      const now = new Date().toISOString();
+      statements.blacklistUser.run(now, userId);
+      return statements.getUser.get(userId);
+    },
+
+    clearBlacklist(userId) {
+      const now = new Date().toISOString();
+      statements.clearBlacklist.run(now, userId);
+      return statements.getUser.get(userId);
+    },
+
+    cancelVerification(userId) {
+      const now = new Date().toISOString();
+      statements.cancelVerification.run(now, userId);
       return statements.getUser.get(userId);
     }
   };
