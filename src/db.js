@@ -86,7 +86,7 @@ export function createDb(sqlitePath) {
     `),
     cancelVerification: db.prepare(`
       UPDATE users
-      SET is_verified = 0, topic_thread_id = NULL, updated_at = ?
+      SET is_verified = 0, updated_at = ?
       WHERE user_id = ?
     `),
     blacklistUser: db.prepare(`
