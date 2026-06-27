@@ -38,8 +38,7 @@ function buildVerificationText() {
 
 function verificationKeyboard(verificationUrl) {
   return Markup.inlineKeyboard([
-    [Markup.button.url("打开验证页面", verificationUrl)],
-    [Markup.button.callback("重新获取验证链接", "verify:refresh")]
+    [Markup.button.url("打开验证页面", verificationUrl)]
   ]);
 }
 
@@ -54,9 +53,25 @@ function topicAdminText(user) {
 }
 
 function topicAdminKeyboard(userId) {
+  return topicAdminKeyboardForUser({
+    user_id: userId,
+    is_verified: false,
+    is_blacklisted: false
+  });
+}
+
+function topicAdminKeyboardForUser(user) {
+  const verifyButton = user.is_verified
+    ? Markup.button.callback("取消验证", `topicadmin:cancel:${user.user_id}`)
+    : Markup.button.callback("通过验证", `topicadmin:approve:${user.user_id}`);
+  const blacklistButton = user.is_blacklisted
+    ? Markup.button.callback("取消拉黑", `topicadmin:unban:${user.user_id}`)
+    : Markup.button.callback("拉黑", `topicadmin:ban:${user.user_id}`);
+
   return Markup.inlineKeyboard([
-    [Markup.button.callback("取消验证", `topicadmin:cancel:${userId}`)],
-    [Markup.button.callback("拉黑", `topicadmin:ban:${userId}`)]
+    [verifyButton],
+    [blacklistButton],
+    [Markup.button.callback("获取用户名", `topicadmin:username:${user.user_id}`)]
   ]);
 }
 
@@ -204,27 +219,12 @@ export function createTelegramBot({ config, store }) {
       topicAdminText(user),
       {
         message_thread_id: ctx.message.message_thread_id,
-        ...topicAdminKeyboard(user.user_id)
+        ...topicAdminKeyboardForUser(user)
       }
     );
   });
 
-  bot.action("verify:refresh", async (ctx) => {
-    const result = await ensureVerificationSession(ctx.from);
-    if (result.status !== "pending") {
-      await ctx.answerCbQuery("当前无需重新验证");
-      return;
-    }
-
-    await ctx.editMessageText(
-      buildVerificationText(),
-      verificationKeyboard(result.verificationUrl)
-    );
-    store.setVerificationPrompt(ctx.from.id, ctx.chat.id, ctx.callbackQuery.message.message_id);
-    await ctx.answerCbQuery("验证链接已刷新");
-  });
-
-  bot.action(/^topicadmin:(cancel|ban):(\d+)$/, async (ctx) => {
+  bot.action(/^topicadmin:(approve|cancel|ban|unban|username):(\d+)$/, async (ctx) => {
     if (ctx.chat?.id !== config.groupId || !ctx.callbackQuery.message?.message_thread_id) {
       await ctx.answerCbQuery("只能在群话题中使用");
       return;
@@ -241,6 +241,15 @@ export function createTelegramBot({ config, store }) {
     if (!topicUser || topicUser.user_id !== userId) {
       await ctx.answerCbQuery("话题用户不匹配");
       return;
+    }
+
+    if (action === "approve") {
+      store.approveUser(userId);
+      await bot.telegram.sendMessage(
+        userId,
+        "管理员已为你通过验证。你现在发送的消息会转发到原话题。"
+      );
+      await ctx.answerCbQuery("已通过验证");
     }
 
     if (action === "cancel") {
@@ -260,7 +269,28 @@ export function createTelegramBot({ config, store }) {
       );
       await ctx.answerCbQuery("已拉黑");
     }
-    await ctx.deleteMessage();
+
+    if (action === "unban") {
+      store.clearBlacklist(userId);
+      await bot.telegram.sendMessage(
+        userId,
+        "管理员已取消你的拉黑状态。"
+      );
+      await ctx.answerCbQuery("已取消拉黑");
+    }
+
+    if (action === "username") {
+      const username = topicUser.username ? `@${topicUser.username}` : "无";
+      await ctx.answerCbQuery(`用户名：${username}`, { show_alert: true });
+      return;
+    }
+
+    await ctx.editMessageText(
+      topicAdminText(store.getUser(userId)),
+      {
+        ...topicAdminKeyboardForUser(store.getUser(userId))
+      }
+    );
   });
 
   bot.on("message", async (ctx) => {
@@ -326,7 +356,7 @@ export function createTelegramBot({ config, store }) {
       const user = store.markVerified(userId, threadId, sessionId);
       await bot.telegram.sendMessage(
         userId,
-        "验证已通过。现在开始发送的消息会自动转发到群组专属话题。"
+        "验证已通过。"
       );
       return user;
     },

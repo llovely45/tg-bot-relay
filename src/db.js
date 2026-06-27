@@ -89,6 +89,11 @@ export function createDb(sqlitePath) {
       SET is_verified = 1, is_blacklisted = 0, topic_thread_id = ?, verification_prompt_chat_id = NULL, verification_prompt_message_id = NULL, updated_at = ?
       WHERE user_id = ?
     `),
+    approveUser: db.prepare(`
+      UPDATE users
+      SET is_verified = 1, is_blacklisted = 0, verification_prompt_chat_id = NULL, verification_prompt_message_id = NULL, updated_at = ?
+      WHERE user_id = ?
+    `),
     cancelVerification: db.prepare(`
       UPDATE users
       SET is_verified = 0, updated_at = ?
@@ -234,6 +239,12 @@ export function createDb(sqlitePath) {
         statements.markSessionPassed.run(now, sessionId);
       });
       tx();
+      return statements.getUser.get(userId);
+    },
+
+    approveUser(userId) {
+      const now = new Date().toISOString();
+      statements.approveUser.run(now, userId);
       return statements.getUser.get(userId);
     },
 
