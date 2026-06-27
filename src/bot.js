@@ -29,12 +29,10 @@ function isForwardableMessage(message) {
   return true;
 }
 
-function buildVerificationText(verificationUrl) {
+function buildVerificationText() {
   return [
     "请先完成验证后再开始聊天。",
-    "验证通过前，你发送的消息不会被转发。",
-    "",
-    `验证链接：${verificationUrl}`
+    "验证通过前，你发送的消息不会被转发。"
   ].join("\n");
 }
 
@@ -95,10 +93,21 @@ export function createTelegramBot({ config, store }) {
   }
 
   async function replyVerificationPrompt(ctx, verificationUrl) {
-    await ctx.reply(
-      buildVerificationText(verificationUrl),
+    const user = store.getUser(ctx.from.id);
+    if (user?.verification_prompt_chat_id && user?.verification_prompt_message_id) {
+      try {
+        await ctx.telegram.deleteMessage(
+          user.verification_prompt_chat_id,
+          user.verification_prompt_message_id
+        );
+      } catch {}
+    }
+
+    const sentMessage = await ctx.reply(
+      buildVerificationText(),
       verificationKeyboard(verificationUrl)
     );
+    store.setVerificationPrompt(ctx.from.id, sentMessage.chat.id, sentMessage.message_id);
   }
 
   async function createTopicForUser(userId) {
@@ -186,9 +195,10 @@ export function createTelegramBot({ config, store }) {
     }
 
     await ctx.editMessageText(
-      buildVerificationText(result.verificationUrl),
+      buildVerificationText(),
       verificationKeyboard(result.verificationUrl)
     );
+    store.setVerificationPrompt(ctx.from.id, ctx.chat.id, ctx.callbackQuery.message.message_id);
     await ctx.answerCbQuery("验证链接已刷新");
   });
 
@@ -228,12 +238,7 @@ export function createTelegramBot({ config, store }) {
       );
       await ctx.answerCbQuery("已拉黑");
     }
-
-    const updatedUser = store.getUser(userId);
-    await ctx.editMessageText(
-      topicAdminText(updatedUser),
-      topicAdminKeyboard(updatedUser.user_id)
-    );
+    await ctx.deleteMessage();
   });
 
   bot.on("message", async (ctx) => {
@@ -287,6 +292,16 @@ export function createTelegramBot({ config, store }) {
       return bot.stop(reason);
     },
     async completeVerification(userId, sessionId) {
+      const existingUser = store.getUser(userId);
+      if (existingUser?.verification_prompt_chat_id && existingUser?.verification_prompt_message_id) {
+        try {
+          await bot.telegram.deleteMessage(
+            existingUser.verification_prompt_chat_id,
+            existingUser.verification_prompt_message_id
+          );
+        } catch {}
+      }
+
       const threadId = await createTopicForUser(userId);
       const user = store.markVerified(userId, threadId, sessionId);
       await bot.telegram.sendMessage(

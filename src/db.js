@@ -38,6 +38,19 @@ export function createDb(sqlitePath) {
       ON verification_sessions(user_id);
   `);
 
+  for (const statement of [
+    "ALTER TABLE users ADD COLUMN verification_prompt_chat_id INTEGER",
+    "ALTER TABLE users ADD COLUMN verification_prompt_message_id INTEGER"
+  ]) {
+    try {
+      db.exec(statement);
+    } catch (error) {
+      if (!String(error.message).includes("duplicate column name")) {
+        throw error;
+      }
+    }
+  }
+
   const statements = {
     upsertUser: db.prepare(`
       INSERT INTO users (
@@ -56,9 +69,19 @@ export function createDb(sqlitePath) {
     `),
     getUser: db.prepare("SELECT * FROM users WHERE user_id = ?"),
     getUserByThreadId: db.prepare("SELECT * FROM users WHERE topic_thread_id = ?"),
+    setVerificationPrompt: db.prepare(`
+      UPDATE users
+      SET verification_prompt_chat_id = ?, verification_prompt_message_id = ?, updated_at = ?
+      WHERE user_id = ?
+    `),
+    clearVerificationPrompt: db.prepare(`
+      UPDATE users
+      SET verification_prompt_chat_id = NULL, verification_prompt_message_id = NULL, updated_at = ?
+      WHERE user_id = ?
+    `),
     verifyUser: db.prepare(`
       UPDATE users
-      SET is_verified = 1, is_blacklisted = 0, topic_thread_id = ?, updated_at = ?
+      SET is_verified = 1, is_blacklisted = 0, topic_thread_id = ?, verification_prompt_chat_id = NULL, verification_prompt_message_id = NULL, updated_at = ?
       WHERE user_id = ?
     `),
     cancelVerification: db.prepare(`
@@ -148,6 +171,18 @@ export function createDb(sqlitePath) {
 
     getUserByThreadId(threadId) {
       return statements.getUserByThreadId.get(threadId);
+    },
+
+    setVerificationPrompt(userId, chatId, messageId) {
+      const now = new Date().toISOString();
+      statements.setVerificationPrompt.run(chatId, messageId, now, userId);
+      return statements.getUser.get(userId);
+    },
+
+    clearVerificationPrompt(userId) {
+      const now = new Date().toISOString();
+      statements.clearVerificationPrompt.run(now, userId);
+      return statements.getUser.get(userId);
     },
 
     createVerificationSession(userId, ttlMinutes) {
