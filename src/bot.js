@@ -285,12 +285,7 @@ export function createTelegramBot({ config, store }) {
       return;
     }
 
-    await ctx.editMessageText(
-      topicAdminText(store.getUser(userId)),
-      {
-        ...topicAdminKeyboardForUser(store.getUser(userId))
-      }
-    );
+    await ctx.deleteMessage();
   });
 
   bot.on("message", async (ctx) => {
