@@ -69,6 +69,11 @@ export function createDb(sqlitePath) {
     `),
     getUser: db.prepare("SELECT * FROM users WHERE user_id = ?"),
     getUserByThreadId: db.prepare("SELECT * FROM users WHERE topic_thread_id = ?"),
+    setTopicThreadId: db.prepare(`
+      UPDATE users
+      SET topic_thread_id = ?, updated_at = ?
+      WHERE user_id = ?
+    `),
     setVerificationPrompt: db.prepare(`
       UPDATE users
       SET verification_prompt_chat_id = ?, verification_prompt_message_id = ?, updated_at = ?
@@ -171,6 +176,12 @@ export function createDb(sqlitePath) {
 
     getUserByThreadId(threadId) {
       return statements.getUserByThreadId.get(threadId);
+    },
+
+    setTopicThreadId(userId, threadId) {
+      const now = new Date().toISOString();
+      statements.setTopicThreadId.run(threadId, now, userId);
+      return statements.getUser.get(userId);
     },
 
     setVerificationPrompt(userId, chatId, messageId) {

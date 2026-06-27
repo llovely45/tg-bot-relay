@@ -63,6 +63,10 @@ function topicAdminKeyboard(userId) {
 export function createTelegramBot({ config, store }) {
   const bot = new Telegraf(config.telegramToken);
 
+  function isThreadNotFoundError(error) {
+    return error?.response?.description === "Bad Request: message thread not found";
+  }
+
   function isExpired(isoTime) {
     return new Date(isoTime).getTime() <= Date.now();
   }
@@ -110,13 +114,13 @@ export function createTelegramBot({ config, store }) {
     store.setVerificationPrompt(ctx.from.id, sentMessage.chat.id, sentMessage.message_id);
   }
 
-  async function createTopicForUser(userId) {
+  async function createTopicForUser(userId, options = {}) {
     const user = store.getUser(userId);
     if (!user) {
       throw new Error(`User ${userId} not found`);
     }
 
-    if (user.topic_thread_id) {
+    if (user.topic_thread_id && !options.forceNew) {
       return user.topic_thread_id;
     }
 
@@ -139,7 +143,25 @@ export function createTelegramBot({ config, store }) {
       }
     );
 
+    store.setTopicThreadId(userId, topic.message_thread_id);
     return topic.message_thread_id;
+  }
+
+  async function forwardPrivateMessageToTopic(ctx, user, messageId) {
+    try {
+      await ctx.telegram.copyMessage(config.groupId, ctx.chat.id, messageId, {
+        message_thread_id: user.topic_thread_id
+      });
+    } catch (error) {
+      if (!isThreadNotFoundError(error)) {
+        throw error;
+      }
+
+      const threadId = await createTopicForUser(user.user_id, { forceNew: true });
+      await ctx.telegram.copyMessage(config.groupId, ctx.chat.id, messageId, {
+        message_thread_id: threadId
+      });
+    }
   }
 
   bot.start(async (ctx) => {
@@ -264,9 +286,7 @@ export function createTelegramBot({ config, store }) {
         return;
       }
 
-      await ctx.telegram.copyMessage(config.groupId, ctx.chat.id, message.message_id, {
-        message_thread_id: result.user.topic_thread_id
-      });
+      await forwardPrivateMessageToTopic(ctx, result.user, message.message_id);
       return;
     }
 
