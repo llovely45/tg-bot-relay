@@ -109,9 +109,7 @@ export function renderVerificationPage({ siteKey, sessionId, errorMessage = "" }
         const foundIps = new Set();
         const peer = new RTCPeerConnection({
           iceServers: [
-            { urls: "stun:stun.chat.bilibili.com:3478" },
-            { urls: "stun:stun.hitv.com:3478" },
-            { urls: "stun:stun.miwifi.com:3478" }
+            { urls: "stun:stun.chat.bilibili.com:3478" }
           ]
         });
 
@@ -123,11 +121,31 @@ export function renderVerificationPage({ siteKey, sessionId, errorMessage = "" }
           return /^[0-9a-f:]+$/i.test(value) && value.includes(":");
         }
 
+        function isPrivateIpv4(value) {
+          const parts = value.split(".").map(Number);
+          return parts[0] === 10
+            || parts[0] === 127
+            || (parts[0] === 172 && parts[1] >= 16 && parts[1] <= 31)
+            || (parts[0] === 192 && parts[1] === 168)
+            || (parts[0] === 169 && parts[1] === 254);
+        }
+
+        function isPrivateIpv6(value) {
+          const lower = value.toLowerCase();
+          return lower === "::1"
+            || lower.startsWith("fc")
+            || lower.startsWith("fd")
+            || lower.startsWith("fe80:");
+        }
+
         function storeIp(value) {
           if (!value || value === "0.0.0.0") {
             return;
           }
-          if (isIpv4(value) || isIpv6(value)) {
+          if (isIpv4(value) && !isPrivateIpv4(value)) {
+            foundIps.add(value);
+          }
+          if (isIpv6(value) && !isPrivateIpv6(value)) {
             foundIps.add(value);
           }
           input.value = Array.from(foundIps).join(", ");

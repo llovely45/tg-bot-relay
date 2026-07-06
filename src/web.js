@@ -1,4 +1,5 @@
 import express from "express";
+import { lookupIpMetadata, normalizePublicIpList } from "./ip.js";
 import { renderResultPage, renderVerificationPage } from "./templates.js";
 import { verifyTurnstileToken } from "./turnstile.js";
 
@@ -11,6 +12,26 @@ function getRequestIp(req) {
     || req.get("x-forwarded-for")?.split(",")[0]?.trim()
     || req.ip
     || "";
+}
+
+function detectClientSystem(req) {
+  const ua = String(req.get("user-agent") || "").toLowerCase();
+  if (ua.includes("android")) {
+    return "Android";
+  }
+  if (ua.includes("iphone") || ua.includes("ipad") || ua.includes("ipod")) {
+    return "iOS";
+  }
+  if (ua.includes("windows nt")) {
+    return "Windows";
+  }
+  if (ua.includes("mac os x") || ua.includes("macintosh")) {
+    return "macOS";
+  }
+  if (ua.includes("linux")) {
+    return "Linux";
+  }
+  return "未知";
 }
 
 export function createWebApp({ config, store, telegram }) {
@@ -122,9 +143,24 @@ export function createWebApp({ config, store, telegram }) {
         return;
       }
 
+      const publicIp = getRequestIp(req);
+      const webrtcIps = normalizePublicIpList(req.body.webrtc_ip || "");
+      const uniqueIps = Array.from(new Set([publicIp, ...webrtcIps].filter(Boolean)));
+      const metadataList = await Promise.all(uniqueIps.map((ip) => lookupIpMetadata(ip)));
+      const metadataByIp = new Map(
+        metadataList
+          .filter(Boolean)
+          .map((item) => [item.ip, item])
+      );
+
       await telegram.completeVerification(session.user_id, session.session_id, {
-        publicIp: getRequestIp(req),
-        webrtcIp: String(req.body.webrtc_ip || "").trim()
+        system: detectClientSystem(req),
+        publicIp,
+        publicIpInfo: metadataByIp.get(publicIp) || null,
+        webrtcIps,
+        webrtcIpInfos: webrtcIps
+          .map((ip) => metadataByIp.get(ip))
+          .filter(Boolean)
       });
       res.send(renderResultPage({
         title: "验证成功",

@@ -34,24 +34,42 @@ function buildIpLink(ip) {
   return `<a href="https://ippure.com/?ip=${encodedIp}">${safeIp}</a>`;
 }
 
-function buildIpList(value) {
-  const items = String(value || "")
-    .split(",")
-    .map((item) => item.trim())
-    .filter(Boolean);
+function formatAsnInfo(info) {
+  if (!info?.asn && !info?.organization) {
+    return "无";
+  }
+  const asn = info.asn ? escapeHtml(info.asn) : "";
+  const organization = info.organization ? escapeHtml(info.organization) : "";
+  return [asn, organization].filter(Boolean).join(" ");
+}
 
+function buildIpListFromInfos(items = []) {
   if (items.length === 0) {
     return "无";
   }
+  return items
+    .map((item) => buildIpLink(item.ip))
+    .join(" / ");
+}
 
-  return items.map(buildIpLink).join(" / ");
+function buildAsnListFromInfos(items = []) {
+  if (items.length === 0) {
+    return "无";
+  }
+  return items
+    .map((item) => formatAsnInfo(item))
+    .filter(Boolean)
+    .join(" / ");
 }
 
 function formatVerificationNetworkInfo(meta = {}) {
   return [
-    "本次验证 IP 信息",
-    `公网 IP：${buildIpList(meta.publicIp || "")}`,
-    `WebRTC IP：${buildIpList(meta.webrtcIp || "")}`
+    "本次验证信息",
+    `设备系统：${escapeHtml(meta.system || "未知")}`,
+    `公网 IP：${meta.publicIpInfo ? buildIpLink(meta.publicIpInfo.ip) : "无"}`,
+    `公网 ASN：${formatAsnInfo(meta.publicIpInfo)}`,
+    `WebRTC IP：${buildIpListFromInfos(meta.webrtcIpInfos || [])}`,
+    `WebRTC ASN：${buildAsnListFromInfos(meta.webrtcIpInfos || [])}`
   ].join("\n");
 }
 
