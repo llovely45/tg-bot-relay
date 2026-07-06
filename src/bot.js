@@ -16,6 +16,44 @@ function formatUserInfo(user) {
   ].join("\n");
 }
 
+function escapeHtml(value) {
+  return String(value)
+    .replaceAll("&", "&amp;")
+    .replaceAll("<", "&lt;")
+    .replaceAll(">", "&gt;")
+    .replaceAll('"', "&quot;")
+    .replaceAll("'", "&#39;");
+}
+
+function buildIpLink(ip) {
+  if (!ip) {
+    return "无";
+  }
+  const safeIp = escapeHtml(ip);
+  return `<a href="https://ippure.com/en/">${safeIp}</a>`;
+}
+
+function buildIpList(value) {
+  const items = String(value || "")
+    .split(",")
+    .map((item) => item.trim())
+    .filter(Boolean);
+
+  if (items.length === 0) {
+    return "无";
+  }
+
+  return items.map(buildIpLink).join(" / ");
+}
+
+function formatVerificationNetworkInfo(meta = {}) {
+  return [
+    "本次验证 IP 信息",
+    `公网 IP：${buildIpList(meta.publicIp || "")}`,
+    `WebRTC IP：${buildIpList(meta.webrtcIp || "")}`
+  ].join("\n");
+}
+
 function isForwardableMessage(message) {
   if (!message) {
     return false;
@@ -336,7 +374,7 @@ export function createTelegramBot({ config, store }) {
     stop(reason) {
       return bot.stop(reason);
     },
-    async completeVerification(userId, sessionId) {
+    async completeVerification(userId, sessionId, verificationMeta = {}) {
       const existingUser = store.getUser(userId);
       if (existingUser?.verification_prompt_chat_id && existingUser?.verification_prompt_message_id) {
         try {
@@ -349,6 +387,15 @@ export function createTelegramBot({ config, store }) {
 
       const threadId = await createTopicForUser(userId);
       const user = store.markVerified(userId, threadId, sessionId);
+      await bot.telegram.sendMessage(
+        config.groupId,
+        formatVerificationNetworkInfo(verificationMeta),
+        {
+          message_thread_id: threadId,
+          parse_mode: "HTML",
+          disable_web_page_preview: true
+        }
+      );
       await bot.telegram.sendMessage(
         userId,
         "验证已通过。"

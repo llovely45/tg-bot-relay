@@ -6,6 +6,13 @@ function isExpired(session) {
   return new Date(session.expires_at).getTime() <= Date.now();
 }
 
+function getRequestIp(req) {
+  return req.get("cf-connecting-ip")
+    || req.get("x-forwarded-for")?.split(",")[0]?.trim()
+    || req.ip
+    || "";
+}
+
 export function createWebApp({ config, store, telegram }) {
   const app = express();
   app.set("trust proxy", true);
@@ -102,7 +109,7 @@ export function createWebApp({ config, store, telegram }) {
       const result = await verifyTurnstileToken({
         secretKey: config.turnstileSecretKey,
         token,
-        remoteIp: req.ip
+        remoteIp: getRequestIp(req)
       });
 
       if (!result.success) {
@@ -115,7 +122,10 @@ export function createWebApp({ config, store, telegram }) {
         return;
       }
 
-      await telegram.completeVerification(session.user_id, session.session_id);
+      await telegram.completeVerification(session.user_id, session.session_id, {
+        publicIp: getRequestIp(req),
+        webrtcIp: String(req.body.webrtc_ip || "").trim()
+      });
       res.send(renderResultPage({
         title: "验证成功",
         description: "验证已通过，请回到 Telegram 继续聊天。"

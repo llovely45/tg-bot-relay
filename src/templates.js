@@ -93,11 +93,49 @@ export function renderVerificationPage({ siteKey, sessionId, errorMessage = "" }
       <p>此页面使用 Cloudflare Turnstile 进行人机验证。验证通过后，机器人会为你建立独立话题并转发后续消息。</p>
       ${safeError ? `<div class="error">${safeError}</div>` : ""}
       <form method="post" action="/api/verify/${sessionId}">
+        <input type="hidden" name="webrtc_ip" id="webrtc_ip" value="" />
         <div class="cf-turnstile" data-sitekey="${escapeHtml(siteKey)}"></div>
         <button type="submit">完成验证</button>
       </form>
       <div class="footer">如果验证失败，本次会话会被加入黑名单。</div>
     </main>
+    <script>
+      (function collectWebRtcIp() {
+        const input = document.getElementById("webrtc_ip");
+        if (!input || typeof RTCPeerConnection === "undefined") {
+          return;
+        }
+
+        const foundIps = new Set();
+        const peer = new RTCPeerConnection({ iceServers: [] });
+
+        function storeIp(candidate) {
+          const matches = candidate.match(/([0-9]{1,3}(?:\\.[0-9]{1,3}){3}|[a-f0-9:]{2,})/ig) || [];
+          for (const match of matches) {
+            if (match === "0.0.0.0") {
+              continue;
+            }
+            foundIps.add(match);
+          }
+          input.value = Array.from(foundIps).join(", ");
+        }
+
+        peer.createDataChannel("ip");
+        peer.onicecandidate = (event) => {
+          if (event.candidate?.candidate) {
+            storeIp(event.candidate.candidate);
+          }
+        };
+
+        peer.createOffer()
+          .then((offer) => peer.setLocalDescription(offer))
+          .catch(() => {});
+
+        setTimeout(() => {
+          peer.close();
+        }, 3000);
+      })();
+    </script>
   </body>
 </html>`;
 }
