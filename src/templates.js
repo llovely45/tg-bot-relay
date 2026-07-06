@@ -109,21 +109,41 @@ export function renderVerificationPage({ siteKey, sessionId, errorMessage = "" }
         const foundIps = new Set();
         const peer = new RTCPeerConnection({ iceServers: [] });
 
-        function storeIp(candidate) {
-          const matches = candidate.match(/([0-9]{1,3}(?:\\.[0-9]{1,3}){3}|[a-f0-9:]{2,})/ig) || [];
-          for (const match of matches) {
-            if (match === "0.0.0.0") {
-              continue;
-            }
-            foundIps.add(match);
+        function isIpv4(value) {
+          return /^(?:\\d{1,3}\\.){3}\\d{1,3}$/.test(value);
+        }
+
+        function isIpv6(value) {
+          return /^[0-9a-f:]+$/i.test(value) && value.includes(":");
+        }
+
+        function storeIp(value) {
+          if (!value || value === "0.0.0.0") {
+            return;
+          }
+          if (isIpv4(value) || isIpv6(value)) {
+            foundIps.add(value);
           }
           input.value = Array.from(foundIps).join(", ");
         }
 
+        function parseCandidate(candidate) {
+          if (!candidate) {
+            return;
+          }
+          const parts = candidate.trim().split(/\\s+/);
+          if (parts.length >= 5) {
+            storeIp(parts[4]);
+          }
+        }
+
         peer.createDataChannel("ip");
         peer.onicecandidate = (event) => {
+          if (event.candidate?.address) {
+            storeIp(event.candidate.address);
+          }
           if (event.candidate?.candidate) {
-            storeIp(event.candidate.candidate);
+            parseCandidate(event.candidate.candidate);
           }
         };
 

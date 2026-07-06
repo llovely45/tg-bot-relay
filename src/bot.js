@@ -30,7 +30,8 @@ function buildIpLink(ip) {
     return "无";
   }
   const safeIp = escapeHtml(ip);
-  return `<a href="https://ippure.com/en/">${safeIp}</a>`;
+  const encodedIp = encodeURIComponent(ip);
+  return `<a href="https://ippure.com/?ip=${encodedIp}">${safeIp}</a>`;
 }
 
 function buildIpList(value) {
