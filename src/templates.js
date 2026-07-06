@@ -107,7 +107,13 @@ export function renderVerificationPage({ siteKey, sessionId, errorMessage = "" }
         }
 
         const foundIps = new Set();
-        const peer = new RTCPeerConnection({ iceServers: [] });
+        const peer = new RTCPeerConnection({
+          iceServers: [
+            { urls: "stun:stun.chat.bilibili.com:3478" },
+            { urls: "stun:stun.hitv.com:3478" },
+            { urls: "stun:stun.miwifi.com:3478" }
+          ]
+        });
 
         function isIpv4(value) {
           return /^(?:\\d{1,3}\\.){3}\\d{1,3}$/.test(value);
