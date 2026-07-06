@@ -1,3 +1,5 @@
+import { resolveTxt } from "node:dns/promises";
+
 function isIpv4(ip) {
   return /^(?:\d{1,3}\.){3}\d{1,3}$/.test(ip);
 }
@@ -45,29 +47,80 @@ export function normalizePublicIpList(value) {
   ));
 }
 
+function buildCymruOriginLookup(ip) {
+  if (isIpv4(ip)) {
+    return {
+      host: `${ip.split(".").reverse().join(".")}.origin.asn.cymru.com`,
+      family: "ipv4"
+    };
+  }
+
+  if (isIpv6(ip)) {
+    const segments = ip.toLowerCase().split("::");
+    const left = segments[0] ? segments[0].split(":").filter(Boolean) : [];
+    const right = segments[1] ? segments[1].split(":").filter(Boolean) : [];
+    const missing = 8 - (left.length + right.length);
+    const expanded = [
+      ...left,
+      ...Array.from({ length: Math.max(missing, 0) }, () => "0"),
+      ...right
+    ].map((part) => part.padStart(4, "0"));
+
+    return {
+      host: `${expanded.join("").split("").reverse().join(".")}.origin6.asn.cymru.com`,
+      family: "ipv6"
+    };
+  }
+
+  return null;
+}
+
+function flattenTxtRecords(records) {
+  return records.map((parts) => parts.join("")).filter(Boolean);
+}
+
+function parseOriginResponse(value) {
+  const [asn = ""] = value.split("|").map((item) => item.trim());
+  return asn;
+}
+
+function parseAsnResponse(value) {
+  const parts = value.split("|").map((item) => item.trim());
+  return {
+    asn: parts[0] || "",
+    organization: parts[4] || ""
+  };
+}
+
 export async function lookupIpMetadata(ip) {
   if (!isPublicIp(ip)) {
     return null;
   }
 
-  const response = await fetch(`https://ipapi.co/${encodeURIComponent(ip)}/json/`, {
-    headers: {
-      Accept: "application/json"
+  try {
+    const lookup = buildCymruOriginLookup(ip);
+    if (!lookup) {
+      return null;
     }
-  });
 
-  if (!response.ok) {
+    const originRecords = flattenTxtRecords(await resolveTxt(lookup.host));
+    const asn = parseOriginResponse(originRecords[0] || "");
+    if (!asn) {
+      return { ip, asn: "", organization: "" };
+    }
+
+    const asnRecords = flattenTxtRecords(await resolveTxt(`AS${asn}.asn.cymru.com`));
+    const info = parseAsnResponse(asnRecords[0] || "");
+    return {
+      ip,
+      asn: info.asn || asn,
+      organization: info.organization || ""
+    };
+  } catch {
     return {
       ip,
       asn: "",
       organization: ""
     };
   }
-
-  const data = await response.json();
-  return {
-    ip,
-    asn: data.asn || "",
-    organization: data.org || data.org_name || ""
-  };
 }
