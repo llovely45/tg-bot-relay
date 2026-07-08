@@ -85,29 +85,6 @@ export function renderVerificationPage({ siteKey, sessionId, errorMessage = "" }
         font-size: 13px;
         opacity: 0.8;
       }
-      .fingerprint {
-        margin-top: 18px;
-        padding: 16px;
-        border-radius: 16px;
-        border: 1px solid var(--line);
-        background: rgba(255, 244, 232, 0.7);
-      }
-      .fingerprint h2 {
-        margin: 0 0 10px;
-        font-size: 18px;
-      }
-      .fingerprint ul {
-        margin: 0;
-        padding-left: 18px;
-      }
-      .fingerprint li {
-        margin: 6px 0;
-        line-height: 1.5;
-      }
-      .muted {
-        opacity: 0.78;
-        font-size: 13px;
-      }
     </style>
   </head>
   <body>
@@ -121,15 +98,6 @@ export function renderVerificationPage({ siteKey, sessionId, errorMessage = "" }
         <div class="cf-turnstile" data-sitekey="${escapeHtml(siteKey)}"></div>
         <button type="submit">完成验证</button>
       </form>
-      <section class="fingerprint">
-        <h2>设备指纹总分 (100%)</h2>
-        <ul>
-          <li>向量 A: WebRTC 向量 (35%) → IP 15% / WebRTC-ASN 5% / WebRTC-ISP 15%</li>
-          <li>向量 B: IP 向量 (25%) → 公网 IP 10% / IP-ASN 5% / IP-ISP 10%</li>
-          <li>向量 C: 硬件与系统向量 (40%) → Canvas 7% / WebGL 7% / Audio 6% / OS 4% / CPU 4% / Screen 6% / Fonts 6%</li>
-        </ul>
-        <div class="footer muted">页面会在本地采集指纹摘要，并在验证通过后回传指纹结果。</div>
-      </section>
       <div class="footer">如果验证失败，本次会话会被加入黑名单。</div>
     </main>
     <script>
