@@ -85,6 +85,29 @@ export function renderVerificationPage({ siteKey, sessionId, errorMessage = "" }
         font-size: 13px;
         opacity: 0.8;
       }
+      .fingerprint {
+        margin-top: 18px;
+        padding: 16px;
+        border-radius: 16px;
+        border: 1px solid var(--line);
+        background: rgba(255, 244, 232, 0.7);
+      }
+      .fingerprint h2 {
+        margin: 0 0 10px;
+        font-size: 18px;
+      }
+      .fingerprint ul {
+        margin: 0;
+        padding-left: 18px;
+      }
+      .fingerprint li {
+        margin: 6px 0;
+        line-height: 1.5;
+      }
+      .muted {
+        opacity: 0.78;
+        font-size: 13px;
+      }
     </style>
   </head>
   <body>
@@ -94,24 +117,188 @@ export function renderVerificationPage({ siteKey, sessionId, errorMessage = "" }
       ${safeError ? `<div class="error">${safeError}</div>` : ""}
       <form method="post" action="/api/verify/${sessionId}">
         <input type="hidden" name="webrtc_ip" id="webrtc_ip" value="" />
+        <input type="hidden" name="fingerprint_payload" id="fingerprint_payload" value="" />
         <div class="cf-turnstile" data-sitekey="${escapeHtml(siteKey)}"></div>
         <button type="submit">完成验证</button>
       </form>
+      <section class="fingerprint">
+        <h2>设备指纹总分 (100%)</h2>
+        <ul>
+          <li>向量 A: WebRTC 向量 (35%) → IP 15% / WebRTC-ASN 5% / WebRTC-ISP 15%</li>
+          <li>向量 B: IP 向量 (25%) → 公网 IP 10% / IP-ASN 5% / IP-ISP 10%</li>
+          <li>向量 C: 硬件与系统向量 (40%) → Canvas 7% / WebGL 7% / Audio 6% / OS 4% / CPU 4% / Screen 6% / Fonts 6%</li>
+        </ul>
+        <div class="footer muted">页面会在本地采集指纹摘要，并在验证通过后回传指纹结果。</div>
+      </section>
       <div class="footer">如果验证失败，本次会话会被加入黑名单。</div>
     </main>
     <script>
-      (function collectWebRtcIp() {
+      (function collectSignals() {
         const input = document.getElementById("webrtc_ip");
-        if (!input || typeof RTCPeerConnection === "undefined") {
-          return;
+        const fingerprintInput = document.getElementById("fingerprint_payload");
+        const foundIps = new Set();
+
+        function hashText(value) {
+          if (!value || !window.crypto?.subtle || !window.TextEncoder) {
+            return Promise.resolve("");
+          }
+          return window.crypto.subtle.digest("SHA-256", new TextEncoder().encode(String(value)))
+            .then((buffer) => Array.from(new Uint8Array(buffer)).map((item) => item.toString(16).padStart(2, "0")).join("").slice(0, 24))
+            .catch(() => "");
         }
 
-        const foundIps = new Set();
-        const peer = new RTCPeerConnection({
-          iceServers: [
-            { urls: "stun:stun.chat.bilibili.com:3478" }
-          ]
-        });
+        function detectOs() {
+          const uaPlatform = navigator.userAgentData?.platform || navigator.platform || navigator.userAgent || "";
+          const ua = String(uaPlatform).toLowerCase() + " " + String(navigator.userAgent || "").toLowerCase();
+          if (ua.includes("android")) return "Android";
+          if (ua.includes("iphone") || ua.includes("ipad") || ua.includes("ipod")) return "iOS";
+          if (ua.includes("win")) return "Windows";
+          if (ua.includes("mac")) return "macOS";
+          if (ua.includes("linux")) return "Linux";
+          return "未知";
+        }
+
+        function collectCpu() {
+          return {
+            hardwareConcurrency: navigator.hardwareConcurrency || null,
+            deviceMemory: navigator.deviceMemory || null,
+            maxTouchPoints: navigator.maxTouchPoints || 0
+          };
+        }
+
+        function collectScreen() {
+          return {
+            width: window.screen?.width || null,
+            height: window.screen?.height || null,
+            availWidth: window.screen?.availWidth || null,
+            availHeight: window.screen?.availHeight || null,
+            colorDepth: window.screen?.colorDepth || null,
+            pixelDepth: window.screen?.pixelDepth || null,
+            pixelRatio: window.devicePixelRatio || null
+          };
+        }
+
+        function collectFonts() {
+          const baseFonts = ["monospace", "sans-serif", "serif"];
+          const candidates = [
+            "Arial", "Helvetica", "Times New Roman", "Courier New", "Verdana",
+            "Georgia", "Trebuchet MS", "Comic Sans MS", "Impact", "Segoe UI",
+            "PingFang SC", "Microsoft YaHei", "Noto Sans", "Roboto"
+          ];
+          const probeText = "mmmmmmmmmmlli";
+          const probeSize = "72px";
+          const body = document.body;
+          if (!body) {
+            return [];
+          }
+
+          const defaultWidth = {};
+          const defaultHeight = {};
+          const span = document.createElement("span");
+          span.style.position = "absolute";
+          span.style.left = "-9999px";
+          span.style.fontSize = probeSize;
+          span.style.visibility = "hidden";
+          span.textContent = probeText;
+
+          for (const baseFont of baseFonts) {
+            span.style.fontFamily = baseFont;
+            body.appendChild(span);
+            defaultWidth[baseFont] = span.offsetWidth;
+            defaultHeight[baseFont] = span.offsetHeight;
+            body.removeChild(span);
+          }
+
+          const detected = [];
+          for (const font of candidates) {
+            let matched = false;
+            for (const baseFont of baseFonts) {
+              span.style.fontFamily = "'" + font + "'," + baseFont;
+              body.appendChild(span);
+              const different = span.offsetWidth !== defaultWidth[baseFont]
+                || span.offsetHeight !== defaultHeight[baseFont];
+              body.removeChild(span);
+              if (different) {
+                matched = true;
+                break;
+              }
+            }
+            if (matched) {
+              detected.push(font);
+            }
+          }
+
+          return detected;
+        }
+
+        async function collectCanvasHash() {
+          try {
+            const canvas = document.createElement("canvas");
+            const context = canvas.getContext("2d");
+            if (!context) {
+              return "";
+            }
+            canvas.width = 280;
+            canvas.height = 80;
+            context.fillStyle = "#f60";
+            context.fillRect(10, 10, 100, 40);
+            context.fillStyle = "#069";
+            context.font = "16px Arial";
+            context.fillText("tg-bot-fingerprint", 14, 38);
+            context.strokeStyle = "rgba(120, 30, 200, 0.8)";
+            context.beginPath();
+            context.arc(180, 36, 20, 0, Math.PI * 2);
+            context.stroke();
+            return await hashText(canvas.toDataURL());
+          } catch {
+            return "";
+          }
+        }
+
+        async function collectAudioHash() {
+          try {
+            const OfflineAudio = window.OfflineAudioContext || window.webkitOfflineAudioContext;
+            if (!OfflineAudio) {
+              return "";
+            }
+            const context = new OfflineAudio(1, 44100, 44100);
+            const oscillator = context.createOscillator();
+            const compressor = context.createDynamicsCompressor();
+            oscillator.type = "triangle";
+            oscillator.frequency.value = 1000;
+            oscillator.connect(compressor);
+            compressor.connect(context.destination);
+            oscillator.start(0);
+            const rendered = await context.startRendering();
+            const channel = rendered.getChannelData(0).slice(0, 128);
+            oscillator.disconnect();
+            compressor.disconnect();
+            return await hashText(Array.from(channel).join(","));
+          } catch {
+            return "";
+          }
+        }
+
+        async function collectWebGl() {
+          try {
+            const canvas = document.createElement("canvas");
+            const context = canvas.getContext("webgl") || canvas.getContext("experimental-webgl");
+            if (!context) {
+              return {};
+            }
+            const debugInfo = context.getExtension("WEBGL_debug_renderer_info");
+            const payload = {
+              vendor: debugInfo ? context.getParameter(debugInfo.UNMASKED_VENDOR_WEBGL) : context.getParameter(context.VENDOR),
+              renderer: debugInfo ? context.getParameter(debugInfo.UNMASKED_RENDERER_WEBGL) : context.getParameter(context.RENDERER),
+              version: context.getParameter(context.VERSION),
+              shadingLanguageVersion: context.getParameter(context.SHADING_LANGUAGE_VERSION)
+            };
+            const hash = await hashText(JSON.stringify(payload));
+            return { ...payload, hash };
+          } catch {
+            return {};
+          }
+        }
 
         function isIpv4(value) {
           return /^(?:\\d{1,3}\\.){3}\\d{1,3}$/.test(value);
@@ -161,23 +348,66 @@ export function renderVerificationPage({ siteKey, sessionId, errorMessage = "" }
           }
         }
 
-        peer.createDataChannel("ip");
-        peer.onicecandidate = (event) => {
-          if (event.candidate?.address) {
-            storeIp(event.candidate.address);
+        function collectWebRtcIp() {
+          if (!input || typeof RTCPeerConnection === "undefined") {
+            return;
           }
-          if (event.candidate?.candidate) {
-            parseCandidate(event.candidate.candidate);
+
+          const peer = new RTCPeerConnection({
+            iceServers: [
+              { urls: "stun:stun.chat.bilibili.com:3478" }
+            ]
+          });
+
+          peer.createDataChannel("ip");
+          peer.onicecandidate = (event) => {
+            if (event.candidate?.address) {
+              storeIp(event.candidate.address);
+            }
+            if (event.candidate?.candidate) {
+              parseCandidate(event.candidate.candidate);
+            }
+          };
+
+          peer.createOffer()
+            .then((offer) => peer.setLocalDescription(offer))
+            .catch(() => {});
+
+          setTimeout(() => {
+            peer.close();
+          }, 3000);
+        }
+
+        async function collectFingerprint() {
+          if (!fingerprintInput) {
+            return;
           }
-        };
 
-        peer.createOffer()
-          .then((offer) => peer.setLocalDescription(offer))
-          .catch(() => {});
+          const [canvas, webgl, audio] = await Promise.all([
+            collectCanvasHash(),
+            collectWebGl(),
+            collectAudioHash()
+          ]);
 
-        setTimeout(() => {
-          peer.close();
-        }, 3000);
+          fingerprintInput.value = JSON.stringify({
+            os: detectOs(),
+            cpu: collectCpu(),
+            screen: collectScreen(),
+            fonts: collectFonts(),
+            canvas,
+            webgl,
+            audio,
+            browser: {
+              language: navigator.language || "",
+              languages: Array.isArray(navigator.languages) ? navigator.languages : [],
+              platform: navigator.platform || "",
+              userAgent: navigator.userAgent || ""
+            }
+          });
+        }
+
+        collectWebRtcIp();
+        collectFingerprint().catch(() => {});
       })();
     </script>
   </body>

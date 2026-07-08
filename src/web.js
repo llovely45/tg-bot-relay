@@ -1,4 +1,5 @@
 import express from "express";
+import { buildFingerprintMeta, parseFingerprintPayload } from "./fingerprint.js";
 import { lookupIpMetadata, normalizePublicIpList } from "./ip.js";
 import { renderResultPage, renderVerificationPage } from "./templates.js";
 import { verifyTurnstileToken } from "./turnstile.js";
@@ -152,6 +153,15 @@ export function createWebApp({ config, store, telegram }) {
           .filter(Boolean)
           .map((item) => [item.ip, item])
       );
+      const fingerprintPayload = parseFingerprintPayload(req.body.fingerprint_payload);
+      const fingerprintMeta = buildFingerprintMeta({
+        system: detectClientSystem(req),
+        publicIpInfo: metadataByIp.get(publicIp) || null,
+        webrtcIpInfos: webrtcIps
+          .map((ip) => metadataByIp.get(ip))
+          .filter(Boolean),
+        fingerprint: fingerprintPayload
+      });
 
       await telegram.completeVerification(session.user_id, session.session_id, {
         system: detectClientSystem(req),
@@ -160,7 +170,8 @@ export function createWebApp({ config, store, telegram }) {
         webrtcIps,
         webrtcIpInfos: webrtcIps
           .map((ip) => metadataByIp.get(ip))
-          .filter(Boolean)
+          .filter(Boolean),
+        fingerprint: fingerprintMeta
       });
       res.send(renderResultPage({
         title: "验证成功",

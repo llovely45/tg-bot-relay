@@ -62,14 +62,43 @@ function buildAsnListFromInfos(items = []) {
     .join(" / ");
 }
 
+function formatVectorPart(part) {
+  return `${part.score}/${part.max}`;
+}
+
+function formatFingerprintInfo(fingerprint = {}) {
+  if (!fingerprint?.id) {
+    return [
+      "设备指纹",
+      "指纹：无",
+      "总分：0/100"
+    ].join("\n");
+  }
+
+  const webrtcParts = fingerprint.vectors?.webrtc?.parts || {};
+  const ipParts = fingerprint.vectors?.ip?.parts || {};
+  const hardwareParts = fingerprint.vectors?.hardware?.parts || {};
+
+  return [
+    "设备指纹",
+    `指纹：<code>${escapeHtml(fingerprint.id)}</code>`,
+    `总分：${fingerprint.score}/${fingerprint.max}`,
+    `向量 A / WebRTC：${fingerprint.vectors.webrtc.score}/${fingerprint.vectors.webrtc.max} (IP ${formatVectorPart(webrtcParts.ip)}, ASN ${formatVectorPart(webrtcParts.asn)}, ISP ${formatVectorPart(webrtcParts.isp)})`,
+    `向量 B / IP：${fingerprint.vectors.ip.score}/${fingerprint.vectors.ip.max} (IP ${formatVectorPart(ipParts.ip)}, ASN ${formatVectorPart(ipParts.asn)}, ISP ${formatVectorPart(ipParts.isp)})`,
+    `向量 C / 硬件系统：${fingerprint.vectors.hardware.score}/${fingerprint.vectors.hardware.max} (Canvas ${formatVectorPart(hardwareParts.canvas)}, WebGL ${formatVectorPart(hardwareParts.webgl)}, Audio ${formatVectorPart(hardwareParts.audio)}, OS ${formatVectorPart(hardwareParts.os)}, CPU ${formatVectorPart(hardwareParts.cpu)}, Screen ${formatVectorPart(hardwareParts.screen)}, Fonts ${formatVectorPart(hardwareParts.fonts)})`
+  ].join("\n");
+}
+
 function formatVerificationNetworkInfo(meta = {}) {
   return [
     "本次验证信息",
     `设备系统：${escapeHtml(meta.system || "未知")}`,
     `公网 IP：${meta.publicIpInfo ? buildIpLink(meta.publicIpInfo.ip) : "无"}`,
-    `公网 ASN：${formatAsnInfo(meta.publicIpInfo)}`,
+    `公网 ASN / ISP：${formatAsnInfo(meta.publicIpInfo)}`,
     `WebRTC IP：${buildIpListFromInfos(meta.webrtcIpInfos || [])}`,
-    `WebRTC ASN：${buildAsnListFromInfos(meta.webrtcIpInfos || [])}`
+    `WebRTC ASN / ISP：${buildAsnListFromInfos(meta.webrtcIpInfos || [])}`,
+    "",
+    formatFingerprintInfo(meta.fingerprint)
   ].join("\n");
 }
 
