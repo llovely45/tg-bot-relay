@@ -323,7 +323,7 @@ export function renderVerificationPage({ siteKey, sessionId, errorMessage = "" }
 
           const peer = new RTCPeerConnection({
             iceServers: [
-              { urls: "stun:stun.chat.bilibili.com:3478" }
+              { urls: "stun:stun.miwifi.com:3478" }
             ]
           });
 
