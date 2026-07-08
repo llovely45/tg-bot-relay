@@ -121,7 +121,7 @@ function buildVerificationText() {
 
 function verificationKeyboard(verificationUrl) {
   return Markup.inlineKeyboard([
-    [Markup.button.url("打开验证页面", verificationUrl)]
+    [Markup.button.webApp("打开验证页面", verificationUrl)]
   ]);
 }
 
@@ -243,12 +243,12 @@ export function createTelegramBot({ config, store }) {
 
     const pending = store.getLatestPendingSessionForUser(user.user_id);
     if (pending && !isExpired(pending.expires_at)) {
-      const verificationUrl = `${config.appBaseUrl}/verify/${pending.session_id}`;
+      const verificationUrl = `${config.appBaseUrl}/miniapp?startapp=${encodeURIComponent(pending.session_id)}`;
       return { user, status: "pending", verificationUrl };
     }
 
     const session = store.createVerificationSession(user.user_id, config.verificationTtlMinutes);
-    const verificationUrl = `${config.appBaseUrl}/verify/${session.session_id}`;
+    const verificationUrl = `${config.appBaseUrl}/miniapp?startapp=${encodeURIComponent(session.session_id)}`;
     return { user, status: "pending", verificationUrl };
   }
 

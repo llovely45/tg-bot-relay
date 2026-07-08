@@ -1,7 +1,7 @@
 import express from "express";
 import { buildFingerprintMeta, parseFingerprintPayload } from "./fingerprint.js";
 import { lookupIpMetadata, normalizePublicIpList } from "./ip.js";
-import { renderResultPage, renderVerificationPage } from "./templates.js";
+import { renderMiniAppVerificationPage, renderResultPage, renderVerificationPage } from "./templates.js";
 import { verifyTurnstileToken } from "./turnstile.js";
 
 function isExpired(session) {
@@ -59,71 +59,45 @@ export function createWebApp({ config, store, telegram }) {
     res.json({ ok: true });
   });
 
-  app.get("/verify/:sessionId", (req, res) => {
-    const session = store.getSession(req.params.sessionId);
-    if (!session) {
-      res.status(404).send(renderResultPage({
-        title: "链接无效",
-        description: "该验证链接不存在。"
-      }));
-      return;
-    }
-
-    if (session.is_blacklisted) {
-      res.status(403).send(renderResultPage({
-        title: "已拒绝访问",
-        description: "该用户已被加入黑名单。"
-      }));
-      return;
-    }
-
-    if (session.status === "passed" || session.is_verified) {
-      res.send(renderResultPage({
-        title: "已验证",
-        description: "你已经通过验证，现在可以回到 Telegram 继续聊天。"
-      }));
-      return;
-    }
-
-    if (session.status !== "pending" || isExpired(session)) {
-      res.status(410).send(renderResultPage({
-        title: "链接已过期",
-        description: "请重新在 Telegram 中发送消息，获取新的验证链接。"
-      }));
-      return;
-    }
-
-    res.send(renderVerificationPage({
-      siteKey: config.turnstileSiteKey,
-      sessionId: session.session_id
+  function renderExpired(res, description = "请重新在 Telegram 中获取新的验证链接。") {
+    res.status(410).send(renderResultPage({
+      title: "链接已过期",
+      description
     }));
-  });
+  }
 
-  app.post("/api/verify/:sessionId", async (req, res) => {
-    const session = store.getSession(req.params.sessionId);
+  function renderInvalid(res) {
+    res.status(404).send(renderResultPage({
+      title: "链接无效",
+      description: "该验证链接不存在。"
+    }));
+  }
+
+  async function handleVerification(req, res, sessionId, options = {}) {
+    const session = store.getSession(sessionId);
     if (!session) {
-      res.status(404).send(renderResultPage({
-        title: "链接无效",
-        description: "该验证链接不存在。"
-      }));
+      renderInvalid(res);
       return;
     }
 
     if (session.status !== "pending" || isExpired(session)) {
-      res.status(410).send(renderResultPage({
-        title: "链接已过期",
-        description: "请重新在 Telegram 中获取新的验证链接。"
-      }));
+      renderExpired(res);
       return;
     }
 
     const token = req.body["cf-turnstile-response"];
     if (!token) {
-      res.status(400).send(renderVerificationPage({
-        siteKey: config.turnstileSiteKey,
-        sessionId: session.session_id,
-        errorMessage: "缺少 Turnstile 验证结果，请重试。"
-      }));
+      const page = options.miniApp
+        ? renderMiniAppVerificationPage({
+          siteKey: config.turnstileSiteKey,
+          errorMessage: "缺少 Turnstile 验证结果，请重试。"
+        })
+        : renderVerificationPage({
+          siteKey: config.turnstileSiteKey,
+          sessionId: session.session_id,
+          errorMessage: "缺少 Turnstile 验证结果，请重试。"
+        });
+      res.status(400).send(page);
       return;
     }
 
@@ -178,12 +152,77 @@ export function createWebApp({ config, store, telegram }) {
         description: "验证已通过，请回到 Telegram 继续聊天。"
       }));
     } catch (error) {
-      res.status(500).send(renderVerificationPage({
-        siteKey: config.turnstileSiteKey,
-        sessionId: session.session_id,
-        errorMessage: `验证服务异常：${error.message}`
-      }));
+      const page = options.miniApp
+        ? renderMiniAppVerificationPage({
+          siteKey: config.turnstileSiteKey,
+          errorMessage: `验证服务异常：${error.message}`
+        })
+        : renderVerificationPage({
+          siteKey: config.turnstileSiteKey,
+          sessionId: session.session_id,
+          errorMessage: `验证服务异常：${error.message}`
+        });
+      res.status(500).send(page);
     }
+  }
+
+  app.get("/verify/:sessionId", (req, res) => {
+    const session = store.getSession(req.params.sessionId);
+    if (!session) {
+      res.status(404).send(renderResultPage({
+        title: "链接无效",
+        description: "该验证链接不存在。"
+      }));
+      return;
+    }
+
+    if (session.is_blacklisted) {
+      res.status(403).send(renderResultPage({
+        title: "已拒绝访问",
+        description: "该用户已被加入黑名单。"
+      }));
+      return;
+    }
+
+    if (session.status === "passed" || session.is_verified) {
+      res.send(renderResultPage({
+        title: "已验证",
+        description: "你已经通过验证，现在可以回到 Telegram 继续聊天。"
+      }));
+      return;
+    }
+
+    if (session.status !== "pending" || isExpired(session)) {
+      res.status(410).send(renderResultPage({
+        title: "链接已过期",
+        description: "请重新在 Telegram 中发送消息，获取新的验证链接。"
+      }));
+      return;
+    }
+
+    res.send(renderVerificationPage({
+      siteKey: config.turnstileSiteKey,
+      sessionId: session.session_id
+    }));
+  });
+
+  app.get("/miniapp", (_req, res) => {
+    res.send(renderMiniAppVerificationPage({
+      siteKey: config.turnstileSiteKey
+    }));
+  });
+
+  app.post("/api/verify/:sessionId", async (req, res) => {
+    await handleVerification(req, res, req.params.sessionId, { miniApp: false });
+  });
+
+  app.post("/api/verify", async (req, res) => {
+    const sessionId = String(req.body.session_id || "").trim();
+    if (!sessionId) {
+      renderInvalid(res);
+      return;
+    }
+    await handleVerification(req, res, sessionId, { miniApp: true });
   });
 
   return app;

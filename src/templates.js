@@ -7,7 +7,14 @@ function escapeHtml(value) {
     .replaceAll("'", "&#39;");
 }
 
-export function renderVerificationPage({ siteKey, sessionId, errorMessage = "" }) {
+function renderVerificationPageHtml({
+  siteKey,
+  formAction,
+  errorMessage = "",
+  includeTelegramWebApp = false,
+  initialSessionId = "",
+  miniAppMode = false
+}) {
   const safeError = escapeHtml(errorMessage);
   return `<!doctype html>
 <html lang="zh-CN">
@@ -15,6 +22,7 @@ export function renderVerificationPage({ siteKey, sessionId, errorMessage = "" }
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <title>身份验证</title>
+    ${includeTelegramWebApp ? '<script src="https://telegram.org/js/telegram-web-app.js"></script>' : ""}
     <script src="https://challenges.cloudflare.com/turnstile/v0/api.js" async defer></script>
     <style>
       :root {
@@ -85,6 +93,9 @@ export function renderVerificationPage({ siteKey, sessionId, errorMessage = "" }
         font-size: 13px;
         opacity: 0.8;
       }
+      .hidden {
+        display: none;
+      }
     </style>
   </head>
   <body>
@@ -92,19 +103,64 @@ export function renderVerificationPage({ siteKey, sessionId, errorMessage = "" }
       <h1>继续聊天前需要验证</h1>
       <p>此页面使用 Cloudflare Turnstile 进行人机验证。验证通过后，机器人会为你建立独立话题并转发后续消息。</p>
       ${safeError ? `<div class="error">${safeError}</div>` : ""}
-      <form method="post" action="/api/verify/${sessionId}">
+      <form method="post" action="${escapeHtml(formAction)}" id="verification_form">
+        <input type="hidden" name="session_id" id="session_id" value="${escapeHtml(initialSessionId)}" />
         <input type="hidden" name="webrtc_ip" id="webrtc_ip" value="" />
         <input type="hidden" name="fingerprint_payload" id="fingerprint_payload" value="" />
         <div class="cf-turnstile" data-sitekey="${escapeHtml(siteKey)}"></div>
         <button type="submit">完成验证</button>
       </form>
+      <div class="error hidden" id="session_error">缺少验证会话，请回到 Telegram 重新打开验证入口。</div>
       <div class="footer">如果验证失败，本次会话会被加入黑名单。</div>
     </main>
     <script>
       (function collectSignals() {
+        const isMiniAppMode = ${miniAppMode ? "true" : "false"};
+        const sessionInput = document.getElementById("session_id");
+        const form = document.getElementById("verification_form");
+        const sessionError = document.getElementById("session_error");
         const input = document.getElementById("webrtc_ip");
         const fingerprintInput = document.getElementById("fingerprint_payload");
         const foundIps = new Set();
+
+        function resolveSessionId() {
+          const query = new URLSearchParams(window.location.search);
+          const queryValue = query.get("session")
+            || query.get("startapp")
+            || query.get("tgWebAppStartParam");
+          if (queryValue) {
+            return queryValue;
+          }
+
+          const startParam = window.Telegram?.WebApp?.initDataUnsafe?.start_param;
+          if (startParam) {
+            return startParam;
+          }
+
+          return sessionInput?.value || "";
+        }
+
+        function setupMiniApp() {
+          if (!isMiniAppMode) {
+            return;
+          }
+
+          const sessionId = resolveSessionId();
+          if (sessionInput) {
+            sessionInput.value = sessionId;
+          }
+
+          if (!sessionId) {
+            form?.classList.add("hidden");
+            sessionError?.classList.remove("hidden");
+            return;
+          }
+
+          if (window.Telegram?.WebApp) {
+            window.Telegram.WebApp.ready();
+            window.Telegram.WebApp.expand();
+          }
+        }
 
         function hashText(value) {
           if (!value || !window.crypto?.subtle || !window.TextEncoder) {
@@ -376,10 +432,30 @@ export function renderVerificationPage({ siteKey, sessionId, errorMessage = "" }
 
         collectWebRtcIp();
         collectFingerprint().catch(() => {});
+        setupMiniApp();
       })();
     </script>
   </body>
 </html>`;
+}
+
+export function renderVerificationPage({ siteKey, sessionId, errorMessage = "" }) {
+  return renderVerificationPageHtml({
+    siteKey,
+    formAction: `/api/verify/${sessionId}`,
+    errorMessage,
+    initialSessionId: sessionId
+  });
+}
+
+export function renderMiniAppVerificationPage({ siteKey, errorMessage = "" }) {
+  return renderVerificationPageHtml({
+    siteKey,
+    formAction: "/api/verify",
+    errorMessage,
+    includeTelegramWebApp: true,
+    miniAppMode: true
+  });
 }
 
 export function renderResultPage({ title, description }) {
