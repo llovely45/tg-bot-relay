@@ -65,16 +65,10 @@ function buildAsnListFromInfos(items = []) {
 
 function formatFingerprintInfo(fingerprint = {}) {
   if (!fingerprint?.id) {
-    return [
-      "设备指纹",
-      "指纹：无"
-    ].join("\n");
+    return "指纹：无";
   }
 
-  return [
-    "设备指纹",
-    `指纹：<code>${escapeHtml(fingerprint.id)}</code>`
-  ].join("\n");
+  return `指纹：<code>${escapeHtml(fingerprint.id)}</code>`;
 }
 
 function formatFingerprintMatches(matches = []) {
@@ -93,6 +87,12 @@ function formatFingerprintMatches(matches = []) {
 
 function formatVerificationResult(meta = {}, matches = []) {
   return [
+    "本次验证信息",
+    `设备系统：${escapeHtml(meta.system || "未知")}`,
+    `公网 IP：${meta.publicIpInfo ? buildIpLink(meta.publicIpInfo.ip) : "无"}`,
+    `公网 ASN / ISP：${formatAsnInfo(meta.publicIpInfo)}`,
+    `WebRTC IP：${buildIpListFromInfos(meta.webrtcIpInfos || [])}`,
+    `WebRTC ASN / ISP：${buildAsnListFromInfos(meta.webrtcIpInfos || [])}`,
     formatFingerprintInfo(meta.fingerprint),
     matches.length > 0 ? "" : null,
     matches.length > 0 ? formatFingerprintMatches(matches) : null

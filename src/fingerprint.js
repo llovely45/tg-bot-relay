@@ -74,14 +74,10 @@ function compareNumberLike(left, right) {
 }
 
 function compareObjectKeys(left, right, keys) {
-  const comparisons = keys
-    .map((key) => compareNumberLike(left?.[key], right?.[key]))
-    .filter((value) => value >= 0);
-
+  const comparisons = keys.map((key) => compareNumberLike(left?.[key], right?.[key]));
   if (comparisons.length === 0) {
     return 0;
   }
-
   return comparisons.reduce((sum, value) => sum + value, 0) / comparisons.length;
 }
 
@@ -132,6 +128,14 @@ function compareScreen(left = {}, right = {}) {
     "pixelDepth",
     "pixelRatio"
   ]);
+}
+
+function weightedAverage(parts) {
+  const totalWeight = parts.reduce((sum, item) => sum + item.weight, 0);
+  if (totalWeight === 0) {
+    return 0;
+  }
+  return Math.round((parts.reduce((sum, item) => sum + (item.weight * item.value), 0) / totalWeight) * 100);
 }
 
 export function parseFingerprintPayload(rawPayload) {
@@ -210,24 +214,27 @@ export function computeFingerprintSimilarity(currentMeta, labeledMeta) {
   const currentWebrtc = currentMeta.webrtcIpInfos?.[0] || {};
   const labeledWebrtc = labeledMeta.webrtcIpInfos?.[0] || {};
 
-  const weightedParts = [
-    { weight: 15, value: compareStrings(currentWebrtc.ip, labeledWebrtc.ip) },
-    { weight: 5, value: compareStrings(currentWebrtc.asn, labeledWebrtc.asn) },
-    { weight: 15, value: compareStrings(currentWebrtc.organization, labeledWebrtc.organization) },
-    { weight: 10, value: compareStrings(currentMeta.publicIpInfo?.ip, labeledMeta.publicIpInfo?.ip) },
-    { weight: 5, value: compareStrings(currentMeta.publicIpInfo?.asn, labeledMeta.publicIpInfo?.asn) },
+  const networkScore = weightedAverage([
+    { weight: 40, value: compareStrings(currentMeta.publicIpInfo?.ip, labeledMeta.publicIpInfo?.ip) },
+    { weight: 10, value: compareStrings(currentMeta.publicIpInfo?.asn, labeledMeta.publicIpInfo?.asn) },
     { weight: 10, value: compareStrings(currentMeta.publicIpInfo?.organization, labeledMeta.publicIpInfo?.organization) },
-    { weight: 7, value: compareStrings(currentMeta.details?.canvas, labeledMeta.details?.canvas) },
-    { weight: 7, value: compareWebGl(currentMeta.details?.webgl, labeledMeta.details?.webgl) },
-    { weight: 6, value: compareStrings(currentMeta.details?.audio, labeledMeta.details?.audio) },
-    { weight: 4, value: compareStrings(currentMeta.details?.os, labeledMeta.details?.os) },
-    { weight: 4, value: compareCpu(currentMeta.details?.cpu, labeledMeta.details?.cpu) },
-    { weight: 6, value: compareScreen(currentMeta.details?.screen, labeledMeta.details?.screen) },
-    { weight: 6, value: compareFonts(currentMeta.details?.fonts, labeledMeta.details?.fonts) }
-  ];
+    { weight: 20, value: compareStrings(currentWebrtc.ip, labeledWebrtc.ip) },
+    { weight: 10, value: compareStrings(currentWebrtc.asn, labeledWebrtc.asn) },
+    { weight: 10, value: compareStrings(currentWebrtc.organization, labeledWebrtc.organization) }
+  ]);
 
-  const total = weightedParts.reduce((sum, item) => sum + (item.weight * item.value), 0);
-  return Math.round(total);
+  const deviceScore = weightedAverage([
+    { weight: 25, value: compareStrings(currentMeta.details?.canvas, labeledMeta.details?.canvas) },
+    { weight: 20, value: compareWebGl(currentMeta.details?.webgl, labeledMeta.details?.webgl) },
+    { weight: 15, value: compareStrings(currentMeta.details?.audio, labeledMeta.details?.audio) },
+    { weight: 10, value: compareStrings(currentMeta.details?.os, labeledMeta.details?.os) },
+    { weight: 10, value: compareCpu(currentMeta.details?.cpu, labeledMeta.details?.cpu) },
+    { weight: 10, value: compareScreen(currentMeta.details?.screen, labeledMeta.details?.screen) },
+    { weight: 10, value: compareFonts(currentMeta.details?.fonts, labeledMeta.details?.fonts) }
+  ]);
+
+  const blendedScore = Math.round((networkScore * 0.4) + (deviceScore * 0.6));
+  return Math.max(networkScore, deviceScore, blendedScore);
 }
 
 export function findSimilarFingerprintLabels(currentMeta, labels = [], threshold = 60) {
