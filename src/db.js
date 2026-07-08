@@ -194,6 +194,22 @@ export function createDb(sqlitePath) {
       FROM fingerprint_labels
       WHERE source_user_id = ?
       ORDER BY created_at DESC
+    `),
+    countFingerprintLabelsByUserId: db.prepare(`
+      SELECT COUNT(*) AS count
+      FROM fingerprint_labels
+      WHERE source_user_id = ?
+    `),
+    getFingerprintLabelsByUserIdPaged: db.prepare(`
+      SELECT *
+      FROM fingerprint_labels
+      WHERE source_user_id = ?
+      ORDER BY created_at DESC
+      LIMIT ? OFFSET ?
+    `),
+    deleteFingerprintLabelById: db.prepare(`
+      DELETE FROM fingerprint_labels
+      WHERE id = ?
     `)
   };
 
@@ -310,6 +326,30 @@ export function createDb(sqlitePath) {
 
     getFingerprintLabelsByUserId(userId) {
       return statements.getFingerprintLabelsByUserId.all(userId).map(hydrateFingerprintLabel);
+    },
+
+    getFingerprintLabelsPageByUserId(userId, page = 1, pageSize = 7) {
+      const normalizedPage = Math.max(1, Number(page) || 1);
+      const normalizedPageSize = Math.max(1, Number(pageSize) || 7);
+      const total = statements.countFingerprintLabelsByUserId.get(userId)?.count ?? 0;
+      const totalPages = Math.max(1, Math.ceil(total / normalizedPageSize));
+      const safePage = Math.min(normalizedPage, totalPages);
+      const offset = (safePage - 1) * normalizedPageSize;
+      const items = statements.getFingerprintLabelsByUserIdPaged
+        .all(userId, normalizedPageSize, offset)
+        .map(hydrateFingerprintLabel);
+
+      return {
+        items,
+        total,
+        page: safePage,
+        pageSize: normalizedPageSize,
+        totalPages
+      };
+    },
+
+    deleteFingerprintLabelById(labelId) {
+      return statements.deleteFingerprintLabelById.run(labelId);
     },
 
     getUsersByState(state, limit = 10) {

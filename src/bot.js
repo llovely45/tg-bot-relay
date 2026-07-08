@@ -156,8 +156,63 @@ function topicAdminKeyboardForUser(user) {
     [verifyButton],
     [blacklistButton],
     [Markup.button.callback("获取用户名", `topicadmin:username:${user.user_id}`)],
-    [Markup.button.callback("标记指纹", `topicadmin:markfp:${user.user_id}`)]
+    [Markup.button.callback("标记指纹", `topicadmin:markfp:${user.user_id}`)],
+    [Markup.button.callback("指纹标签", `topicadmin:labels:${user.user_id}:1`)]
   ]);
+}
+
+function truncateText(value, maxLength = 24) {
+  const text = String(value || "");
+  if (text.length <= maxLength) {
+    return text;
+  }
+  return `${text.slice(0, maxLength - 1)}…`;
+}
+
+function fingerprintLabelsText(user, pageData) {
+  const lines = [
+    "指纹标签",
+    `用户ID：${user.user_id}`,
+    `页码：${pageData.page}/${pageData.totalPages}`,
+    `总数：${pageData.total}`
+  ];
+
+  if (pageData.items.length === 0) {
+    lines.push("暂无标签");
+    return lines.join("\n");
+  }
+
+  lines.push("");
+  for (const item of pageData.items) {
+    lines.push(
+      `#${item.id} ${item.label_name} · ${item.fingerprint_id}${item.note ? ` · ${truncateText(item.note, 30)}` : ""}`
+    );
+  }
+
+  return lines.join("\n");
+}
+
+function fingerprintLabelsKeyboard(userId, pageData) {
+  const rows = pageData.items.map((item) => ([
+    Markup.button.callback(
+      `删除 #${item.id} ${truncateText(item.label_name, 10)}`,
+      `topicadmin:dellabel:${userId}:${item.id}:${pageData.page}`
+    )
+  ]));
+
+  const navRow = [];
+  if (pageData.page > 1) {
+    navRow.push(Markup.button.callback("上一页", `topicadmin:labels:${userId}:${pageData.page - 1}`));
+  }
+  if (pageData.page < pageData.totalPages) {
+    navRow.push(Markup.button.callback("下一页", `topicadmin:labels:${userId}:${pageData.page + 1}`));
+  }
+  if (navRow.length > 0) {
+    rows.push(navRow);
+  }
+
+  rows.push([Markup.button.callback("关闭", `topicadmin:closelabels:${userId}`)]);
+  return Markup.inlineKeyboard(rows);
 }
 
 export function createTelegramBot({ config, store }) {
@@ -417,6 +472,77 @@ export function createTelegramBot({ config, store }) {
     }
 
     await ctx.deleteMessage();
+  });
+
+  bot.action(/^topicadmin:labels:(\d+):(\d+)$/, async (ctx) => {
+    if (ctx.chat?.id !== config.groupId || !ctx.callbackQuery.message?.message_thread_id) {
+      await ctx.answerCbQuery("只能在群话题中使用");
+      return;
+    }
+    if (!(await isGroupAdmin(ctx.from.id))) {
+      await ctx.answerCbQuery("无权限");
+      return;
+    }
+
+    const userId = Number(ctx.match[1]);
+    const page = Number(ctx.match[2]);
+    const topicUser = store.getUserByThreadId(ctx.callbackQuery.message.message_thread_id);
+    if (!topicUser || topicUser.user_id !== userId) {
+      await ctx.answerCbQuery("话题用户不匹配");
+      return;
+    }
+
+    const pageData = store.getFingerprintLabelsPageByUserId(userId, page, 7);
+    await ctx.editMessageText(
+      fingerprintLabelsText(topicUser, pageData),
+      {
+        ...fingerprintLabelsKeyboard(userId, pageData)
+      }
+    );
+    await ctx.answerCbQuery();
+  });
+
+  bot.action(/^topicadmin:dellabel:(\d+):(\d+):(\d+)$/, async (ctx) => {
+    if (ctx.chat?.id !== config.groupId || !ctx.callbackQuery.message?.message_thread_id) {
+      await ctx.answerCbQuery("只能在群话题中使用");
+      return;
+    }
+    if (!(await isGroupAdmin(ctx.from.id))) {
+      await ctx.answerCbQuery("无权限");
+      return;
+    }
+
+    const userId = Number(ctx.match[1]);
+    const labelId = Number(ctx.match[2]);
+    const page = Number(ctx.match[3]);
+    const topicUser = store.getUserByThreadId(ctx.callbackQuery.message.message_thread_id);
+    if (!topicUser || topicUser.user_id !== userId) {
+      await ctx.answerCbQuery("话题用户不匹配");
+      return;
+    }
+
+    store.deleteFingerprintLabelById(labelId);
+    const pageData = store.getFingerprintLabelsPageByUserId(userId, page, 7);
+    await ctx.editMessageText(
+      fingerprintLabelsText(topicUser, pageData),
+      {
+        ...fingerprintLabelsKeyboard(userId, pageData)
+      }
+    );
+    await ctx.answerCbQuery("已删除标签");
+  });
+
+  bot.action(/^topicadmin:closelabels:(\d+)$/, async (ctx) => {
+    if (ctx.chat?.id !== config.groupId) {
+      await ctx.answerCbQuery("只能在群话题中使用");
+      return;
+    }
+    if (!(await isGroupAdmin(ctx.from.id))) {
+      await ctx.answerCbQuery("无权限");
+      return;
+    }
+    await ctx.deleteMessage();
+    await ctx.answerCbQuery();
   });
 
   bot.on("message", async (ctx) => {
