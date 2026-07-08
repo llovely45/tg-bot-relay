@@ -1,5 +1,6 @@
 import crypto from "node:crypto";
 import Database from "better-sqlite3";
+import { parseStoredFingerprintMeta, serializeFingerprintMeta } from "./fingerprint.js";
 
 export function createDb(sqlitePath) {
   const db = new Database(sqlitePath);
@@ -36,11 +37,25 @@ export function createDb(sqlitePath) {
 
     CREATE INDEX IF NOT EXISTS idx_verification_user_id
       ON verification_sessions(user_id);
+
+    CREATE TABLE IF NOT EXISTS fingerprint_labels (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      label_name TEXT NOT NULL,
+      note TEXT,
+      fingerprint_id TEXT NOT NULL,
+      fingerprint_payload TEXT NOT NULL,
+      source_user_id INTEGER NOT NULL,
+      created_by_user_id INTEGER NOT NULL,
+      created_at TEXT NOT NULL
+    );
   `);
 
   for (const statement of [
     "ALTER TABLE users ADD COLUMN verification_prompt_chat_id INTEGER",
-    "ALTER TABLE users ADD COLUMN verification_prompt_message_id INTEGER"
+    "ALTER TABLE users ADD COLUMN verification_prompt_message_id INTEGER",
+    "ALTER TABLE users ADD COLUMN latest_fingerprint_id TEXT",
+    "ALTER TABLE users ADD COLUMN latest_fingerprint_payload TEXT",
+    "ALTER TABLE users ADD COLUMN latest_fingerprint_at TEXT"
   ]) {
     try {
       db.exec(statement);
@@ -82,6 +97,11 @@ export function createDb(sqlitePath) {
     clearVerificationPrompt: db.prepare(`
       UPDATE users
       SET verification_prompt_chat_id = NULL, verification_prompt_message_id = NULL, updated_at = ?
+      WHERE user_id = ?
+    `),
+    setLatestFingerprint: db.prepare(`
+      UPDATE users
+      SET latest_fingerprint_id = ?, latest_fingerprint_payload = ?, latest_fingerprint_at = ?, updated_at = ?
       WHERE user_id = ?
     `),
     verifyUser: db.prepare(`
@@ -156,8 +176,43 @@ export function createDb(sqlitePath) {
       UPDATE verification_sessions
       SET status = 'failed', fail_reason = ?, consumed_at = ?
       WHERE session_id = ?
+    `),
+    createFingerprintLabel: db.prepare(`
+      INSERT INTO fingerprint_labels (
+        label_name, note, fingerprint_id, fingerprint_payload, source_user_id, created_by_user_id, created_at
+      ) VALUES (
+        @label_name, @note, @fingerprint_id, @fingerprint_payload, @source_user_id, @created_by_user_id, @created_at
+      )
+    `),
+    listFingerprintLabels: db.prepare(`
+      SELECT *
+      FROM fingerprint_labels
+      ORDER BY created_at DESC
+    `),
+    getFingerprintLabelsByUserId: db.prepare(`
+      SELECT *
+      FROM fingerprint_labels
+      WHERE source_user_id = ?
+      ORDER BY created_at DESC
     `)
   };
+
+  function hydrateUser(user) {
+    if (!user) {
+      return user;
+    }
+    return {
+      ...user,
+      latest_fingerprint_meta: parseStoredFingerprintMeta(user.latest_fingerprint_payload)
+    };
+  }
+
+  function hydrateFingerprintLabel(label) {
+    return {
+      ...label,
+      fingerprint_meta: parseStoredFingerprintMeta(label.fingerprint_payload)
+    };
+  }
 
   return {
     upsertTelegramUser(telegramUser) {
@@ -172,33 +227,45 @@ export function createDb(sqlitePath) {
         is_blacklisted: 0,
         timestamp
       });
-      return statements.getUser.get(telegramUser.id);
+      return hydrateUser(statements.getUser.get(telegramUser.id));
     },
 
     getUser(userId) {
-      return statements.getUser.get(userId);
+      return hydrateUser(statements.getUser.get(userId));
     },
 
     getUserByThreadId(threadId) {
-      return statements.getUserByThreadId.get(threadId);
+      return hydrateUser(statements.getUserByThreadId.get(threadId));
     },
 
     setTopicThreadId(userId, threadId) {
       const now = new Date().toISOString();
       statements.setTopicThreadId.run(threadId, now, userId);
-      return statements.getUser.get(userId);
+      return hydrateUser(statements.getUser.get(userId));
     },
 
     setVerificationPrompt(userId, chatId, messageId) {
       const now = new Date().toISOString();
       statements.setVerificationPrompt.run(chatId, messageId, now, userId);
-      return statements.getUser.get(userId);
+      return hydrateUser(statements.getUser.get(userId));
     },
 
     clearVerificationPrompt(userId) {
       const now = new Date().toISOString();
       statements.clearVerificationPrompt.run(now, userId);
-      return statements.getUser.get(userId);
+      return hydrateUser(statements.getUser.get(userId));
+    },
+
+    setLatestFingerprint(userId, fingerprintMeta) {
+      const now = new Date().toISOString();
+      statements.setLatestFingerprint.run(
+        fingerprintMeta?.id ?? null,
+        serializeFingerprintMeta(fingerprintMeta),
+        now,
+        now,
+        userId
+      );
+      return hydrateUser(statements.getUser.get(userId));
     },
 
     createVerificationSession(userId, ttlMinutes) {
@@ -224,6 +291,27 @@ export function createDb(sqlitePath) {
       return statements.getSession.get(sessionId);
     },
 
+    createFingerprintLabel({ labelName, note, fingerprintMeta, sourceUserId, createdByUserId }) {
+      const now = new Date().toISOString();
+      statements.createFingerprintLabel.run({
+        label_name: labelName,
+        note: note || null,
+        fingerprint_id: fingerprintMeta.id,
+        fingerprint_payload: serializeFingerprintMeta(fingerprintMeta),
+        source_user_id: sourceUserId,
+        created_by_user_id: createdByUserId,
+        created_at: now
+      });
+    },
+
+    listFingerprintLabels() {
+      return statements.listFingerprintLabels.all().map(hydrateFingerprintLabel);
+    },
+
+    getFingerprintLabelsByUserId(userId) {
+      return statements.getFingerprintLabelsByUserId.all(userId).map(hydrateFingerprintLabel);
+    },
+
     getUsersByState(state, limit = 10) {
       return statements.getUsersByState.all(state, state, state, limit);
     },
@@ -239,13 +327,13 @@ export function createDb(sqlitePath) {
         statements.markSessionPassed.run(now, sessionId);
       });
       tx();
-      return statements.getUser.get(userId);
+      return hydrateUser(statements.getUser.get(userId));
     },
 
     approveUser(userId) {
       const now = new Date().toISOString();
       statements.approveUser.run(now, userId);
-      return statements.getUser.get(userId);
+      return hydrateUser(statements.getUser.get(userId));
     },
 
     blacklistUser(userId, sessionId, reason) {
@@ -255,25 +343,25 @@ export function createDb(sqlitePath) {
         statements.markSessionFailed.run(reason, now, sessionId);
       });
       tx();
-      return statements.getUser.get(userId);
+      return hydrateUser(statements.getUser.get(userId));
     },
 
     blacklistUserDirect(userId) {
       const now = new Date().toISOString();
       statements.blacklistUser.run(now, userId);
-      return statements.getUser.get(userId);
+      return hydrateUser(statements.getUser.get(userId));
     },
 
     clearBlacklist(userId) {
       const now = new Date().toISOString();
       statements.clearBlacklist.run(now, userId);
-      return statements.getUser.get(userId);
+      return hydrateUser(statements.getUser.get(userId));
     },
 
     cancelVerification(userId) {
       const now = new Date().toISOString();
       statements.cancelVerification.run(now, userId);
-      return statements.getUser.get(userId);
+      return hydrateUser(statements.getUser.get(userId));
     }
   };
 }

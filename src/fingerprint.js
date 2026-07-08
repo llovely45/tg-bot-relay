@@ -1,27 +1,5 @@
 import crypto from "node:crypto";
 
-const VECTOR_WEIGHTS = {
-  webrtc: {
-    ip: 15,
-    asn: 5,
-    isp: 15
-  },
-  ip: {
-    ip: 10,
-    asn: 5,
-    isp: 10
-  },
-  hardware: {
-    canvas: 7,
-    webgl: 7,
-    audio: 6,
-    os: 4,
-    cpu: 4,
-    screen: 6,
-    fonts: 6
-  }
-};
-
 function normalizeString(value) {
   if (value === null || value === undefined) {
     return "";
@@ -52,29 +30,108 @@ function stableObject(value) {
     }, {});
 }
 
-function hasValue(value) {
-  if (Array.isArray(value)) {
-    return value.length > 0;
+function normalizeIpInfo(info) {
+  if (!info) {
+    return {
+      ip: "",
+      asn: "",
+      organization: ""
+    };
   }
-  if (value && typeof value === "object") {
-    return Object.keys(value).length > 0;
-  }
-  return Boolean(normalizeString(value));
-}
 
-function scorePart(weight, present) {
   return {
-    score: present ? weight : 0,
-    max: weight
+    ip: normalizeString(info.ip),
+    asn: normalizeString(info.asn),
+    organization: normalizeString(info.organization)
   };
 }
 
-function sumScores(parts) {
-  return Object.values(parts).reduce((total, item) => total + item.score, 0);
+function normalizeFingerprintDetails(fingerprint = {}, system = "") {
+  return {
+    os: normalizeString(fingerprint.os || system),
+    cpu: normalizeObject(fingerprint.cpu),
+    screen: normalizeObject(fingerprint.screen),
+    fonts: Array.isArray(fingerprint.fonts) ? fingerprint.fonts.map(normalizeString).filter(Boolean) : [],
+    canvas: normalizeString(fingerprint.canvas),
+    webgl: normalizeObject(fingerprint.webgl),
+    audio: normalizeString(fingerprint.audio),
+    browser: normalizeObject(fingerprint.browser)
+  };
 }
 
-function sumMax(parts) {
-  return Object.values(parts).reduce((total, item) => total + item.max, 0);
+function compareStrings(left, right) {
+  if (!left || !right) {
+    return 0;
+  }
+  return normalizeString(left) === normalizeString(right) ? 1 : 0;
+}
+
+function compareNumberLike(left, right) {
+  if (left === null || left === undefined || right === null || right === undefined) {
+    return 0;
+  }
+  return Number(left) === Number(right) ? 1 : 0;
+}
+
+function compareObjectKeys(left, right, keys) {
+  const comparisons = keys
+    .map((key) => compareNumberLike(left?.[key], right?.[key]))
+    .filter((value) => value >= 0);
+
+  if (comparisons.length === 0) {
+    return 0;
+  }
+
+  return comparisons.reduce((sum, value) => sum + value, 0) / comparisons.length;
+}
+
+function compareFonts(left = [], right = []) {
+  const a = new Set(left.map(normalizeString).filter(Boolean));
+  const b = new Set(right.map(normalizeString).filter(Boolean));
+  if (a.size === 0 || b.size === 0) {
+    return 0;
+  }
+
+  let intersection = 0;
+  for (const item of a) {
+    if (b.has(item)) {
+      intersection += 1;
+    }
+  }
+  const union = new Set([...a, ...b]).size;
+  return union > 0 ? intersection / union : 0;
+}
+
+function compareWebGl(left = {}, right = {}) {
+  if (!left || !right) {
+    return 0;
+  }
+  const parts = [
+    compareStrings(left.hash, right.hash),
+    compareStrings(left.vendor, right.vendor),
+    compareStrings(left.renderer, right.renderer)
+  ];
+  return parts.reduce((sum, value) => sum + value, 0) / parts.length;
+}
+
+function compareCpu(left = {}, right = {}) {
+  return compareObjectKeys(left, right, [
+    "hardwareConcurrency",
+    "deviceMemory",
+    "maxTouchPoints"
+  ]);
+}
+
+function compareScreen(left = {}, right = {}) {
+  return compareObjectKeys(left, right, [
+    "width",
+    "height",
+    "availWidth",
+    "availHeight",
+    "colorDepth",
+    "pixelDepth",
+    "pixelRatio"
+  ]);
 }
 
 export function parseFingerprintPayload(rawPayload) {
@@ -84,16 +141,7 @@ export function parseFingerprintPayload(rawPayload) {
 
   try {
     const parsed = JSON.parse(String(rawPayload));
-    return {
-      os: normalizeString(parsed.os),
-      cpu: normalizeObject(parsed.cpu),
-      screen: normalizeObject(parsed.screen),
-      fonts: Array.isArray(parsed.fonts) ? parsed.fonts.map(normalizeString).filter(Boolean) : [],
-      canvas: normalizeString(parsed.canvas),
-      webgl: normalizeObject(parsed.webgl),
-      audio: normalizeString(parsed.audio),
-      browser: normalizeObject(parsed.browser)
-    };
+    return normalizeFingerprintDetails(parsed);
   } catch {
     return {};
   }
@@ -105,69 +153,14 @@ export function buildFingerprintMeta({
   webrtcIpInfos = [],
   fingerprint = {}
 }) {
-  const normalizedFingerprint = {
-    os: normalizeString(fingerprint.os || system),
-    cpu: normalizeObject(fingerprint.cpu),
-    screen: normalizeObject(fingerprint.screen),
-    fonts: Array.isArray(fingerprint.fonts) ? fingerprint.fonts.filter(Boolean) : [],
-    canvas: normalizeString(fingerprint.canvas),
-    webgl: normalizeObject(fingerprint.webgl),
-    audio: normalizeString(fingerprint.audio),
-    browser: normalizeObject(fingerprint.browser)
-  };
-
-  const firstWebrtcInfo = webrtcIpInfos[0] || null;
-  const vectorAParts = {
-    ip: scorePart(VECTOR_WEIGHTS.webrtc.ip, Boolean(firstWebrtcInfo?.ip)),
-    asn: scorePart(VECTOR_WEIGHTS.webrtc.asn, Boolean(firstWebrtcInfo?.asn)),
-    isp: scorePart(VECTOR_WEIGHTS.webrtc.isp, Boolean(firstWebrtcInfo?.organization))
-  };
-  const vectorBParts = {
-    ip: scorePart(VECTOR_WEIGHTS.ip.ip, Boolean(publicIpInfo?.ip)),
-    asn: scorePart(VECTOR_WEIGHTS.ip.asn, Boolean(publicIpInfo?.asn)),
-    isp: scorePart(VECTOR_WEIGHTS.ip.isp, Boolean(publicIpInfo?.organization))
-  };
-  const vectorCParts = {
-    canvas: scorePart(VECTOR_WEIGHTS.hardware.canvas, hasValue(normalizedFingerprint.canvas)),
-    webgl: scorePart(VECTOR_WEIGHTS.hardware.webgl, hasValue(normalizedFingerprint.webgl)),
-    audio: scorePart(VECTOR_WEIGHTS.hardware.audio, hasValue(normalizedFingerprint.audio)),
-    os: scorePart(VECTOR_WEIGHTS.hardware.os, hasValue(normalizedFingerprint.os)),
-    cpu: scorePart(VECTOR_WEIGHTS.hardware.cpu, hasValue(normalizedFingerprint.cpu)),
-    screen: scorePart(VECTOR_WEIGHTS.hardware.screen, hasValue(normalizedFingerprint.screen)),
-    fonts: scorePart(VECTOR_WEIGHTS.hardware.fonts, hasValue(normalizedFingerprint.fonts))
-  };
-
-  const vectors = {
-    webrtc: {
-      score: sumScores(vectorAParts),
-      max: sumMax(vectorAParts),
-      parts: vectorAParts
-    },
-    ip: {
-      score: sumScores(vectorBParts),
-      max: sumMax(vectorBParts),
-      parts: vectorBParts
-    },
-    hardware: {
-      score: sumScores(vectorCParts),
-      max: sumMax(vectorCParts),
-      parts: vectorCParts
-    }
-  };
-
-  const score = vectors.webrtc.score + vectors.ip.score + vectors.hardware.score;
-  const max = vectors.webrtc.max + vectors.ip.max + vectors.hardware.max;
+  const details = normalizeFingerprintDetails(fingerprint, system);
+  const normalizedPublicIpInfo = normalizeIpInfo(publicIpInfo);
+  const normalizedWebrtcIpInfos = webrtcIpInfos.map(normalizeIpInfo);
 
   const fingerprintSource = stableObject({
-    publicIp: publicIpInfo?.ip || "",
-    publicAsn: publicIpInfo?.asn || "",
-    publicOrg: publicIpInfo?.organization || "",
-    webrtc: webrtcIpInfos.map((item) => ({
-      ip: item.ip || "",
-      asn: item.asn || "",
-      organization: item.organization || ""
-    })),
-    fingerprint: normalizedFingerprint
+    publicIpInfo: normalizedPublicIpInfo,
+    webrtcIpInfos: normalizedWebrtcIpInfos,
+    details
   });
 
   return {
@@ -176,9 +169,73 @@ export function buildFingerprintMeta({
       .update(JSON.stringify(fingerprintSource))
       .digest("hex")
       .slice(0, 24),
-    score,
-    max,
-    vectors,
-    details: normalizedFingerprint
+    publicIpInfo: normalizedPublicIpInfo,
+    webrtcIpInfos: normalizedWebrtcIpInfos,
+    details
   };
+}
+
+export function serializeFingerprintMeta(meta = {}) {
+  return JSON.stringify({
+    id: normalizeString(meta.id),
+    publicIpInfo: normalizeIpInfo(meta.publicIpInfo),
+    webrtcIpInfos: Array.isArray(meta.webrtcIpInfos) ? meta.webrtcIpInfos.map(normalizeIpInfo) : [],
+    details: normalizeFingerprintDetails(meta.details)
+  });
+}
+
+export function parseStoredFingerprintMeta(rawValue) {
+  if (!rawValue) {
+    return null;
+  }
+
+  try {
+    const parsed = JSON.parse(String(rawValue));
+    return {
+      id: normalizeString(parsed.id),
+      publicIpInfo: normalizeIpInfo(parsed.publicIpInfo),
+      webrtcIpInfos: Array.isArray(parsed.webrtcIpInfos) ? parsed.webrtcIpInfos.map(normalizeIpInfo) : [],
+      details: normalizeFingerprintDetails(parsed.details)
+    };
+  } catch {
+    return null;
+  }
+}
+
+export function computeFingerprintSimilarity(currentMeta, labeledMeta) {
+  if (!currentMeta || !labeledMeta) {
+    return 0;
+  }
+
+  const currentWebrtc = currentMeta.webrtcIpInfos?.[0] || {};
+  const labeledWebrtc = labeledMeta.webrtcIpInfos?.[0] || {};
+
+  const weightedParts = [
+    { weight: 15, value: compareStrings(currentWebrtc.ip, labeledWebrtc.ip) },
+    { weight: 5, value: compareStrings(currentWebrtc.asn, labeledWebrtc.asn) },
+    { weight: 15, value: compareStrings(currentWebrtc.organization, labeledWebrtc.organization) },
+    { weight: 10, value: compareStrings(currentMeta.publicIpInfo?.ip, labeledMeta.publicIpInfo?.ip) },
+    { weight: 5, value: compareStrings(currentMeta.publicIpInfo?.asn, labeledMeta.publicIpInfo?.asn) },
+    { weight: 10, value: compareStrings(currentMeta.publicIpInfo?.organization, labeledMeta.publicIpInfo?.organization) },
+    { weight: 7, value: compareStrings(currentMeta.details?.canvas, labeledMeta.details?.canvas) },
+    { weight: 7, value: compareWebGl(currentMeta.details?.webgl, labeledMeta.details?.webgl) },
+    { weight: 6, value: compareStrings(currentMeta.details?.audio, labeledMeta.details?.audio) },
+    { weight: 4, value: compareStrings(currentMeta.details?.os, labeledMeta.details?.os) },
+    { weight: 4, value: compareCpu(currentMeta.details?.cpu, labeledMeta.details?.cpu) },
+    { weight: 6, value: compareScreen(currentMeta.details?.screen, labeledMeta.details?.screen) },
+    { weight: 6, value: compareFonts(currentMeta.details?.fonts, labeledMeta.details?.fonts) }
+  ];
+
+  const total = weightedParts.reduce((sum, item) => sum + (item.weight * item.value), 0);
+  return Math.round(total);
+}
+
+export function findSimilarFingerprintLabels(currentMeta, labels = [], threshold = 60) {
+  return labels
+    .map((label) => ({
+      ...label,
+      similarity: computeFingerprintSimilarity(currentMeta, label.fingerprint_meta)
+    }))
+    .filter((label) => label.similarity >= threshold)
+    .sort((left, right) => right.similarity - left.similarity);
 }

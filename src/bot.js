@@ -1,4 +1,5 @@
 import { Markup, Telegraf } from "telegraf";
+import { findSimilarFingerprintLabels } from "./fingerprint.js";
 
 function formatUserName(user) {
   const fullName = [user.first_name, user.last_name].filter(Boolean).join(" ").trim();
@@ -62,44 +63,40 @@ function buildAsnListFromInfos(items = []) {
     .join(" / ");
 }
 
-function formatVectorPart(part) {
-  return `${part.score}/${part.max}`;
-}
-
 function formatFingerprintInfo(fingerprint = {}) {
   if (!fingerprint?.id) {
     return [
       "设备指纹",
-      "指纹：无",
-      "总分：0/100"
+      "指纹：无"
     ].join("\n");
   }
 
-  const webrtcParts = fingerprint.vectors?.webrtc?.parts || {};
-  const ipParts = fingerprint.vectors?.ip?.parts || {};
-  const hardwareParts = fingerprint.vectors?.hardware?.parts || {};
-
   return [
     "设备指纹",
-    `指纹：<code>${escapeHtml(fingerprint.id)}</code>`,
-    `总分：${fingerprint.score}/${fingerprint.max}`,
-    `向量 A / WebRTC：${fingerprint.vectors.webrtc.score}/${fingerprint.vectors.webrtc.max} (IP ${formatVectorPart(webrtcParts.ip)}, ASN ${formatVectorPart(webrtcParts.asn)}, ISP ${formatVectorPart(webrtcParts.isp)})`,
-    `向量 B / IP：${fingerprint.vectors.ip.score}/${fingerprint.vectors.ip.max} (IP ${formatVectorPart(ipParts.ip)}, ASN ${formatVectorPart(ipParts.asn)}, ISP ${formatVectorPart(ipParts.isp)})`,
-    `向量 C / 硬件系统：${fingerprint.vectors.hardware.score}/${fingerprint.vectors.hardware.max} (Canvas ${formatVectorPart(hardwareParts.canvas)}, WebGL ${formatVectorPart(hardwareParts.webgl)}, Audio ${formatVectorPart(hardwareParts.audio)}, OS ${formatVectorPart(hardwareParts.os)}, CPU ${formatVectorPart(hardwareParts.cpu)}, Screen ${formatVectorPart(hardwareParts.screen)}, Fonts ${formatVectorPart(hardwareParts.fonts)})`
+    `指纹：<code>${escapeHtml(fingerprint.id)}</code>`
   ].join("\n");
 }
 
-function formatVerificationNetworkInfo(meta = {}) {
+function formatFingerprintMatches(matches = []) {
+  if (matches.length === 0) {
+    return "";
+  }
+
   return [
-    "本次验证信息",
-    `设备系统：${escapeHtml(meta.system || "未知")}`,
-    `公网 IP：${meta.publicIpInfo ? buildIpLink(meta.publicIpInfo.ip) : "无"}`,
-    `公网 ASN / ISP：${formatAsnInfo(meta.publicIpInfo)}`,
-    `WebRTC IP：${buildIpListFromInfos(meta.webrtcIpInfos || [])}`,
-    `WebRTC ASN / ISP：${buildAsnListFromInfos(meta.webrtcIpInfos || [])}`,
-    "",
-    formatFingerprintInfo(meta.fingerprint)
+    "相似标签命中",
+    ...matches.map((match) => {
+      const note = match.note ? `，备注：${escapeHtml(match.note)}` : "";
+      return `- 标签：${escapeHtml(match.label_name)}，相似度：${match.similarity}%${note}`;
+    })
   ].join("\n");
+}
+
+function formatVerificationResult(meta = {}, matches = []) {
+  return [
+    formatFingerprintInfo(meta.fingerprint),
+    matches.length > 0 ? "" : null,
+    matches.length > 0 ? formatFingerprintMatches(matches) : null
+  ].filter(Boolean).join("\n");
 }
 
 function isForwardableMessage(message) {
@@ -134,7 +131,8 @@ function topicAdminText(user) {
     `用户ID：${user.user_id}`,
     `昵称：${formatUserName(user)}`,
     `用户名：${user.username ? `@${user.username}` : "无"}`,
-    `当前状态：${user.is_blacklisted ? "已拉黑" : user.is_verified ? "已验证" : "待验证"}`
+    `当前状态：${user.is_blacklisted ? "已拉黑" : user.is_verified ? "已验证" : "待验证"}`,
+    `当前指纹：${user.latest_fingerprint_id ? user.latest_fingerprint_id : "无"}`
   ].join("\n");
 }
 
@@ -157,12 +155,14 @@ function topicAdminKeyboardForUser(user) {
   return Markup.inlineKeyboard([
     [verifyButton],
     [blacklistButton],
-    [Markup.button.callback("获取用户名", `topicadmin:username:${user.user_id}`)]
+    [Markup.button.callback("获取用户名", `topicadmin:username:${user.user_id}`)],
+    [Markup.button.callback("标记指纹", `topicadmin:markfp:${user.user_id}`)]
   ]);
 }
 
 export function createTelegramBot({ config, store }) {
   const bot = new Telegraf(config.telegramToken);
+  const pendingFingerprintMarks = new Map();
 
   function isThreadNotFoundError(error) {
     return error?.response?.description === "Bad Request: message thread not found";
@@ -265,6 +265,26 @@ export function createTelegramBot({ config, store }) {
     }
   }
 
+  function buildPendingMarkKey(threadId, adminId) {
+    return `${threadId}:${adminId}`;
+  }
+
+  function parseFingerprintMarkInput(text) {
+    const raw = String(text || "").trim();
+    if (!raw) {
+      return null;
+    }
+
+    const [labelPart, ...noteParts] = raw.split("|");
+    const label = labelPart.trim();
+    const note = noteParts.join("|").trim();
+    if (!label) {
+      return null;
+    }
+
+    return { label, note };
+  }
+
   bot.start(async (ctx) => {
     const result = await ensureVerificationSession(ctx.from);
 
@@ -310,7 +330,7 @@ export function createTelegramBot({ config, store }) {
     );
   });
 
-  bot.action(/^topicadmin:(approve|cancel|ban|unban|username):(\d+)$/, async (ctx) => {
+  bot.action(/^topicadmin:(approve|cancel|ban|unban|username|markfp):(\d+)$/, async (ctx) => {
     if (ctx.chat?.id !== config.groupId || !ctx.callbackQuery.message?.message_thread_id) {
       await ctx.answerCbQuery("只能在群话题中使用");
       return;
@@ -371,6 +391,31 @@ export function createTelegramBot({ config, store }) {
       return;
     }
 
+    if (action === "markfp") {
+      if (!topicUser.latest_fingerprint_meta?.id) {
+        await ctx.answerCbQuery("当前用户还没有可标记的指纹", { show_alert: true });
+        return;
+      }
+
+      pendingFingerprintMarks.set(
+        buildPendingMarkKey(ctx.callbackQuery.message.message_thread_id, ctx.from.id),
+        {
+          userId,
+          threadId: ctx.callbackQuery.message.message_thread_id
+        }
+      );
+      await ctx.answerCbQuery("请发送：标签|备注");
+      await ctx.deleteMessage();
+      await ctx.reply(
+        "请在当前话题发送 `标签|备注` 来标记该用户当前指纹。备注可留空。",
+        {
+          message_thread_id: ctx.callbackQuery.message.message_thread_id,
+          parse_mode: "Markdown"
+        }
+      );
+      return;
+    }
+
     await ctx.deleteMessage();
   });
 
@@ -405,6 +450,53 @@ export function createTelegramBot({ config, store }) {
       return;
     }
 
+    const pendingMark = pendingFingerprintMarks.get(buildPendingMarkKey(
+      message.message_thread_id,
+      ctx.from.id
+    ));
+
+    if (pendingMark) {
+      pendingFingerprintMarks.delete(buildPendingMarkKey(message.message_thread_id, ctx.from.id));
+
+      const payload = parseFingerprintMarkInput(message.text || "");
+      if (!payload) {
+        await ctx.reply("标记失败，请使用 `标签|备注` 格式重新操作。", {
+          message_thread_id: message.message_thread_id,
+          parse_mode: "Markdown"
+        });
+        return;
+      }
+
+      const topicUser = store.getUserByThreadId(message.message_thread_id);
+      if (!topicUser?.latest_fingerprint_meta?.id) {
+        await ctx.reply("当前用户没有可标记的指纹。", {
+          message_thread_id: message.message_thread_id
+        });
+        return;
+      }
+
+      store.createFingerprintLabel({
+        labelName: payload.label,
+        note: payload.note,
+        fingerprintMeta: topicUser.latest_fingerprint_meta,
+        sourceUserId: topicUser.user_id,
+        createdByUserId: ctx.from.id
+      });
+
+      await ctx.reply(
+        [
+          "指纹标记已保存",
+          `标签：${payload.label}`,
+          `指纹：${topicUser.latest_fingerprint_meta.id}`,
+          `备注：${payload.note || "无"}`
+        ].join("\n"),
+        {
+          message_thread_id: message.message_thread_id
+        }
+      );
+      return;
+    }
+
     if (!message.message_thread_id || !isForwardableMessage(message) || ctx.from?.is_bot) {
       return;
     }
@@ -434,10 +526,16 @@ export function createTelegramBot({ config, store }) {
       }
 
       const threadId = await createTopicForUser(userId);
+      store.setLatestFingerprint(userId, verificationMeta.fingerprint);
+      const matches = findSimilarFingerprintLabels(
+        verificationMeta.fingerprint,
+        store.listFingerprintLabels(),
+        60
+      );
       const user = store.markVerified(userId, threadId, sessionId);
       await bot.telegram.sendMessage(
         config.groupId,
-        formatVerificationNetworkInfo(verificationMeta),
+        formatVerificationResult(verificationMeta, matches),
         {
           message_thread_id: threadId,
           parse_mode: "HTML",
