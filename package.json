@@ -4,12 +4,18 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "start": "node src/index.js"
+    "start": "node dist/index.js",
+    "start:dev": "node src/index.js",
+    "build": "node scripts/build-obfuscated.mjs"
   },
   "dependencies": {
     "better-sqlite3": "^11.8.1",
     "dotenv": "^16.4.7",
     "express": "^4.21.2",
     "telegraf": "^4.16.3"
+  },
+  "devDependencies": {
+    "esbuild": "^0.28.1",
+    "javascript-obfuscator": "^5.4.7"
   }
 }

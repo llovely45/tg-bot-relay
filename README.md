@@ -33,6 +33,18 @@
 
 ## 部署
 
+### 0. 生成混淆代码
+
+本地维护原始源码在 `src/`，发布和镜像运行使用混淆后的 `dist/index.js`。
+
+每次修改本地源码后先执行：
+
+```bash
+npm run build
+```
+
+然后提交 `dist/index.js`。仓库和 Docker 镜像都以 `dist` 为运行入口。
+
 ### 1. 准备 `.env`
 
 ```bash
@@ -137,12 +149,9 @@ docker build -t tg-bot-relay . && docker run -d --name tg-bot-relay --restart un
 
 ```text
 src/
-  bot.js
-  config.js
-  db.js
-  fingerprint.js
+  本地原始源码，默认不提交
+dist/
   index.js
-  templates.js
-  turnstile.js
-  web.js
+scripts/
+  build-obfuscated.mjs
 ```
