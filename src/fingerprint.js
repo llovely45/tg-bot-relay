@@ -138,6 +138,181 @@ function weightedAverage(parts) {
   return Math.round((parts.reduce((sum, item) => sum + (item.weight * item.value), 0) / totalWeight) * 100);
 }
 
+function isIpv4(ip) {
+  return /^(?:\d{1,3}\.){3}\d{1,3}$/.test(ip);
+}
+
+function subnetSimilarity(left, right) {
+  if (!isIpv4(left) || !isIpv4(right)) {
+    return compareStrings(left, right);
+  }
+  const a = left.split(".");
+  const b = right.split(".");
+  if (a[0] === b[0] && a[1] === b[1] && a[2] === b[2] && a[3] === b[3]) {
+    return 1;
+  }
+  if (a[0] === b[0] && a[1] === b[1] && a[2] === b[2]) {
+    return 0.8;
+  }
+  if (a[0] === b[0] && a[1] === b[1]) {
+    return 0.5;
+  }
+  if (a[0] === b[0]) {
+    return 0.2;
+  }
+  return 0;
+}
+
+function subnetLabel(left, right) {
+  if (!isIpv4(left) || !isIpv4(right)) {
+    return compareStrings(left, right) ? "相同" : "";
+  }
+  const a = left.split(".");
+  const b = right.split(".");
+  if (a[0] === b[0] && a[1] === b[1] && a[2] === b[2] && a[3] === b[3]) {
+    return "相同";
+  }
+  if (a[0] === b[0] && a[1] === b[1] && a[2] === b[2]) {
+    return "同C段";
+  }
+  if (a[0] === b[0] && a[1] === b[1]) {
+    return "同B段";
+  }
+  if (a[0] === b[0]) {
+    return "同A段";
+  }
+  return "";
+}
+
+function similarityStatus(score) {
+  if (score >= 1) {
+    return "相同";
+  }
+  if (score > 0) {
+    return "部分相似";
+  }
+  return "";
+}
+
+function uniqueBy(items, getKey) {
+  const seen = new Set();
+  return items.filter((item) => {
+    const key = getKey(item);
+    if (seen.has(key)) {
+      return false;
+    }
+    seen.add(key);
+    return true;
+  });
+}
+
+function buildSimilarityDetails(currentMeta, labeledMeta) {
+  const currentWebrtc = currentMeta.webrtcIpInfos?.[0] || {};
+  const labeledWebrtc = labeledMeta.webrtcIpInfos?.[0] || {};
+  const details = [];
+
+  const fields = [
+    {
+      key: "webrtc_ip",
+      label: "webrtc ip",
+      score: subnetSimilarity(currentWebrtc.ip, labeledWebrtc.ip),
+      status: subnetLabel(currentWebrtc.ip, labeledWebrtc.ip),
+      value: currentWebrtc.ip || ""
+    },
+    {
+      key: "webrtc_asn",
+      label: "webrtc asn",
+      score: compareStrings(currentWebrtc.asn, labeledWebrtc.asn),
+      status: similarityStatus(compareStrings(currentWebrtc.asn, labeledWebrtc.asn)),
+      value: currentWebrtc.asn || ""
+    },
+    {
+      key: "webrtc_isp",
+      label: "webrtc isp",
+      score: compareStrings(currentWebrtc.organization, labeledWebrtc.organization),
+      status: similarityStatus(compareStrings(currentWebrtc.organization, labeledWebrtc.organization)),
+      value: currentWebrtc.organization || ""
+    },
+    {
+      key: "public_ip",
+      label: "公网 ip",
+      score: subnetSimilarity(currentMeta.publicIpInfo?.ip, labeledMeta.publicIpInfo?.ip),
+      status: subnetLabel(currentMeta.publicIpInfo?.ip, labeledMeta.publicIpInfo?.ip),
+      value: currentMeta.publicIpInfo?.ip || ""
+    },
+    {
+      key: "public_asn",
+      label: "公网 asn",
+      score: compareStrings(currentMeta.publicIpInfo?.asn, labeledMeta.publicIpInfo?.asn),
+      status: similarityStatus(compareStrings(currentMeta.publicIpInfo?.asn, labeledMeta.publicIpInfo?.asn)),
+      value: currentMeta.publicIpInfo?.asn || ""
+    },
+    {
+      key: "public_isp",
+      label: "公网 isp",
+      score: compareStrings(currentMeta.publicIpInfo?.organization, labeledMeta.publicIpInfo?.organization),
+      status: similarityStatus(compareStrings(currentMeta.publicIpInfo?.organization, labeledMeta.publicIpInfo?.organization)),
+      value: currentMeta.publicIpInfo?.organization || ""
+    },
+    {
+      key: "canvas",
+      label: "canvas指纹",
+      score: compareStrings(currentMeta.details?.canvas, labeledMeta.details?.canvas),
+      status: similarityStatus(compareStrings(currentMeta.details?.canvas, labeledMeta.details?.canvas)),
+      value: currentMeta.details?.canvas || ""
+    },
+    {
+      key: "webgl",
+      label: "webgl指纹",
+      score: compareWebGl(currentMeta.details?.webgl, labeledMeta.details?.webgl),
+      status: similarityStatus(compareWebGl(currentMeta.details?.webgl, labeledMeta.details?.webgl)),
+      value: currentMeta.details?.webgl?.hash || ""
+    },
+    {
+      key: "audio",
+      label: "audio指纹",
+      score: compareStrings(currentMeta.details?.audio, labeledMeta.details?.audio),
+      status: similarityStatus(compareStrings(currentMeta.details?.audio, labeledMeta.details?.audio)),
+      value: currentMeta.details?.audio || ""
+    },
+    {
+      key: "os",
+      label: "系统",
+      score: compareStrings(currentMeta.details?.os, labeledMeta.details?.os),
+      status: similarityStatus(compareStrings(currentMeta.details?.os, labeledMeta.details?.os)),
+      value: currentMeta.details?.os || ""
+    },
+    {
+      key: "cpu",
+      label: "cpu",
+      score: compareCpu(currentMeta.details?.cpu, labeledMeta.details?.cpu),
+      status: similarityStatus(compareCpu(currentMeta.details?.cpu, labeledMeta.details?.cpu)),
+      value: JSON.stringify(currentMeta.details?.cpu || {})
+    },
+    {
+      key: "screen",
+      label: "screen",
+      score: compareScreen(currentMeta.details?.screen, labeledMeta.details?.screen),
+      status: similarityStatus(compareScreen(currentMeta.details?.screen, labeledMeta.details?.screen)),
+      value: JSON.stringify(currentMeta.details?.screen || {})
+    },
+    {
+      key: "fonts",
+      label: "fonts",
+      score: compareFonts(currentMeta.details?.fonts, labeledMeta.details?.fonts),
+      status: similarityStatus(compareFonts(currentMeta.details?.fonts, labeledMeta.details?.fonts)),
+      value: (currentMeta.details?.fonts || []).join(", ")
+    }
+  ];
+
+  for (const field of fields) {
+    if (field.score > 0) {
+      details.push(field);
+    }
+  }
+  return details;
+}
+
 export function parseFingerprintPayload(rawPayload) {
   if (!rawPayload) {
     return {};
@@ -215,10 +390,10 @@ export function computeFingerprintSimilarity(currentMeta, labeledMeta) {
   const labeledWebrtc = labeledMeta.webrtcIpInfos?.[0] || {};
 
   const networkScore = weightedAverage([
-    { weight: 40, value: compareStrings(currentMeta.publicIpInfo?.ip, labeledMeta.publicIpInfo?.ip) },
+    { weight: 40, value: subnetSimilarity(currentMeta.publicIpInfo?.ip, labeledMeta.publicIpInfo?.ip) },
     { weight: 10, value: compareStrings(currentMeta.publicIpInfo?.asn, labeledMeta.publicIpInfo?.asn) },
     { weight: 10, value: compareStrings(currentMeta.publicIpInfo?.organization, labeledMeta.publicIpInfo?.organization) },
-    { weight: 20, value: compareStrings(currentWebrtc.ip, labeledWebrtc.ip) },
+    { weight: 20, value: subnetSimilarity(currentWebrtc.ip, labeledWebrtc.ip) },
     { weight: 10, value: compareStrings(currentWebrtc.asn, labeledWebrtc.asn) },
     { weight: 10, value: compareStrings(currentWebrtc.organization, labeledWebrtc.organization) }
   ]);
@@ -237,12 +412,42 @@ export function computeFingerprintSimilarity(currentMeta, labeledMeta) {
   return Math.max(networkScore, deviceScore, blendedScore);
 }
 
+export function computeFingerprintMatch(currentMeta, labeledMeta) {
+  return {
+    similarity: computeFingerprintSimilarity(currentMeta, labeledMeta),
+    fields: buildSimilarityDetails(currentMeta, labeledMeta)
+  };
+}
+
 export function findSimilarFingerprintLabels(currentMeta, labels = [], threshold = 60) {
   return labels
-    .map((label) => ({
-      ...label,
-      similarity: computeFingerprintSimilarity(currentMeta, label.fingerprint_meta)
-    }))
+    .map((label) => {
+      const match = computeFingerprintMatch(currentMeta, label.fingerprint_meta);
+      return {
+        ...label,
+        similarity: match.similarity,
+        matched_fields: match.fields
+      };
+    })
     .filter((label) => label.similarity >= threshold)
     .sort((left, right) => right.similarity - left.similarity);
+}
+
+export function listFingerprintFieldValues(meta = {}) {
+  return uniqueBy([
+    { key: "fingerprint_id", label: "指纹key", value: meta.id || "" },
+    { key: "public_ip", label: "公网 ip", value: meta.publicIpInfo?.ip || "" },
+    { key: "public_asn", label: "公网 asn", value: meta.publicIpInfo?.asn || "" },
+    { key: "public_isp", label: "公网 isp", value: meta.publicIpInfo?.organization || "" },
+    { key: "webrtc_ip", label: "webrtc ip", value: meta.webrtcIpInfos?.[0]?.ip || "" },
+    { key: "webrtc_asn", label: "webrtc asn", value: meta.webrtcIpInfos?.[0]?.asn || "" },
+    { key: "webrtc_isp", label: "webrtc isp", value: meta.webrtcIpInfos?.[0]?.organization || "" },
+    { key: "canvas", label: "canvas指纹", value: meta.details?.canvas || "" },
+    { key: "webgl", label: "webgl指纹", value: meta.details?.webgl?.hash || "" },
+    { key: "audio", label: "audio指纹", value: meta.details?.audio || "" },
+    { key: "os", label: "系统", value: meta.details?.os || "" },
+    { key: "cpu", label: "cpu", value: JSON.stringify(meta.details?.cpu || {}) },
+    { key: "screen", label: "screen", value: JSON.stringify(meta.details?.screen || {}) },
+    { key: "fonts", label: "fonts", value: (meta.details?.fonts || []).join(", ") }
+  ].filter((item) => item.value), (item) => item.key);
 }

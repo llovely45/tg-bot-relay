@@ -1,5 +1,5 @@
 import { Markup, Telegraf } from "telegraf";
-import { findSimilarFingerprintLabels } from "./fingerprint.js";
+import { findSimilarFingerprintLabels, listFingerprintFieldValues } from "./fingerprint.js";
 
 function formatUserName(user) {
   const fullName = [user.first_name, user.last_name].filter(Boolean).join(" ").trim();
@@ -80,8 +80,14 @@ function formatFingerprintMatches(matches = []) {
     "相似标签命中",
     ...matches.map((match) => {
       const note = match.note ? `，备注：${escapeHtml(match.note)}` : "";
-      return `- 标签：${escapeHtml(match.label_name)}，相似度：${match.similarity}%${note}`;
-    })
+      const lines = [
+        `标签：${escapeHtml(match.label_name)}，相似度：${match.similarity}%${note}`
+      ];
+      for (const field of match.matched_fields || []) {
+        lines.push(`- ${escapeHtml(field.label)}${field.status ? escapeHtml(field.status) : ""}：${escapeHtml(field.value)}`);
+      }
+      return lines.join("\n");
+    }).join("\n")
   ].join("\n");
 }
 
@@ -157,7 +163,8 @@ function topicAdminKeyboardForUser(user) {
     [blacklistButton],
     [Markup.button.callback("获取用户名", `topicadmin:username:${user.user_id}`)],
     [Markup.button.callback("标记指纹", `topicadmin:markfp:${user.user_id}`)],
-    [Markup.button.callback("指纹标签", `topicadmin:labels:${user.user_id}:1`)]
+    [Markup.button.callback("指纹标签", `topicadmin:labels:${user.user_id}:1`)],
+    [Markup.button.callback("显示标签", `topicadmin:labelnames:1:${user.user_id}`)]
   ]);
 }
 
@@ -213,6 +220,82 @@ function fingerprintLabelsKeyboard(userId, pageData) {
 
   rows.push([Markup.button.callback("关闭", `topicadmin:closelabels:${userId}`)]);
   return Markup.inlineKeyboard(rows);
+}
+
+function fingerprintLabelNamesText(pageData) {
+  const lines = [
+    "标签名称",
+    `页码：${pageData.page}/${pageData.totalPages}`,
+    `总数：${pageData.total}`
+  ];
+
+  if (pageData.items.length === 0) {
+    lines.push("暂无标签");
+    return lines.join("\n");
+  }
+
+  lines.push("");
+  for (const item of pageData.items) {
+    lines.push(`${item.label_name} · ${item.total}`);
+  }
+  return lines.join("\n");
+}
+
+function fingerprintLabelNamesKeyboard(pageData, userId) {
+  const rows = pageData.items.map((item) => ([
+    Markup.button.callback(
+      `${truncateText(item.label_name, 20)} (${item.total})`,
+      `topicadmin:labeldetail:${pageData.page}:${userId}:${encodeURIComponent(item.label_name)}`
+    )
+  ]));
+
+  const navRow = [];
+  if (pageData.page > 1) {
+    navRow.push(Markup.button.callback("上一页", `topicadmin:labelnames:${pageData.page - 1}:${userId}`));
+  }
+  if (pageData.page < pageData.totalPages) {
+    navRow.push(Markup.button.callback("下一页", `topicadmin:labelnames:${pageData.page + 1}:${userId}`));
+  }
+  if (navRow.length > 0) {
+    rows.push(navRow);
+  }
+  rows.push([Markup.button.callback("关闭", `topicadmin:closelabels:${userId}`)]);
+  return Markup.inlineKeyboard(rows);
+}
+
+function fingerprintLabelDetailText(labelName, items = []) {
+  const lines = [
+    `标签详情：${labelName}`
+  ];
+
+  if (items.length === 0) {
+    lines.push("暂无记录");
+    return lines.join("\n");
+  }
+
+  for (const item of items) {
+    lines.push("");
+    lines.push(`指纹key：${item.fingerprint_id}`);
+    for (const field of listFingerprintFieldValues(item.fingerprint_meta)) {
+      if (field.key === "fingerprint_id") {
+        continue;
+      }
+      lines.push(`- ${field.label}：${field.value}`);
+    }
+  }
+
+  return lines.join("\n");
+}
+
+function uniqueFingerprintItemsByKey(items = []) {
+  const seen = new Set();
+  return items.filter((item) => {
+    if (seen.has(item.fingerprint_id)) {
+      return false;
+    }
+    seen.add(item.fingerprint_id);
+    return true;
+  });
 }
 
 export function createTelegramBot({ config, store }) {
@@ -542,6 +625,54 @@ export function createTelegramBot({ config, store }) {
       return;
     }
     await ctx.deleteMessage();
+    await ctx.answerCbQuery();
+  });
+
+  bot.action(/^topicadmin:labelnames:(\d+):(\d+)$/, async (ctx) => {
+    if (ctx.chat?.id !== config.groupId) {
+      await ctx.answerCbQuery("只能在群话题中使用");
+      return;
+    }
+    if (!(await isGroupAdmin(ctx.from.id))) {
+      await ctx.answerCbQuery("无权限");
+      return;
+    }
+
+    const page = Number(ctx.match[1]);
+    const userId = Number(ctx.match[2]);
+    const pageData = store.getDistinctFingerprintLabelNamesPage(page, 7);
+    await ctx.editMessageText(
+      fingerprintLabelNamesText(pageData),
+      {
+        ...fingerprintLabelNamesKeyboard(pageData, userId)
+      }
+    );
+    await ctx.answerCbQuery();
+  });
+
+  bot.action(/^topicadmin:labeldetail:(\d+):(\d+):(.+)$/, async (ctx) => {
+    if (ctx.chat?.id !== config.groupId) {
+      await ctx.answerCbQuery("只能在群话题中使用");
+      return;
+    }
+    if (!(await isGroupAdmin(ctx.from.id))) {
+      await ctx.answerCbQuery("无权限");
+      return;
+    }
+
+    const page = Number(ctx.match[1]);
+    const userId = Number(ctx.match[2]);
+    const labelName = decodeURIComponent(ctx.match[3]);
+    const items = uniqueFingerprintItemsByKey(store.getFingerprintLabelsByName(labelName));
+    await ctx.editMessageText(
+      fingerprintLabelDetailText(labelName, items),
+      {
+        ...Markup.inlineKeyboard([
+          [Markup.button.callback("返回标签名称", `topicadmin:labelnames:${page}:${userId}`)],
+          [Markup.button.callback("关闭", `topicadmin:closelabels:${userId}`)]
+        ])
+      }
+    );
     await ctx.answerCbQuery();
   });
 
